@@ -1,4 +1,7 @@
-(ns edn-to-binary.core)
+(ns edn-to-binary.core
+  (:import java.nio.ByteBuffer)
+  (:import java.nio.ByteOrder)
+  (:require [clojure.spec.alpha :as s]))
 
 
 ; (defprotocol Codec
@@ -68,3 +71,55 @@
             (reduce xf result input-bytes)))))))
    ([binary-stream]
    (sequence (serialize) binary-stream)))
+
+
+(defprotocol Codec
+  (encoder [this encoding] "Encoder creates a function that will take data, and return a binary collection")
+  (decoder [this encodings] "Decoder creates a function that will take a sequence of bytes, and return a vector
+                            that contains a parsed piece of data, and any remaining bytes not consumed during the decoding")
+  (encoding-spec [this]))
+
+(s/def ::word-size #{1 2 4 8})
+(s/def ::order #{:little :big :network :native})
+
+
+(s/def ::base-encoding (s/keys :req [::word-size ::order]))
+
+(def default-encoding {::word-size 1 ::order :little})
+
+(defmacro reify-primitive 
+  ([class get put coerce-to] `(reify-primitive ~class ~get ~put ~coerce-to identity))
+  ([class get put coerce-to coerce-from]
+   (let [size `(. ~class BYTES)
+         get-fn `#(~coerce-from (~get %))
+        put-fn `#(~put %1 (~coerce-to %2))]
+    `(primitive-impl ~size ~get-fn ~put-fn))))
+
+(defn primitive-impl [size get-buffer put-buffer]
+  (reify Codec
+    (encoder [_ encoding]
+      (fn [data]
+        (let [buff (ByteBuffer/allocate size)
+              _ (put-buffer buff data)]
+          (seq (.array buff)))))
+    (decoder [_ encoding]
+      (fn [binary]
+        (let [buff (ByteBuffer/wrap (byte-array (take size binary)))
+              data (get-buffer buff)
+              remaining (drop size binary)]
+          [data remaining])))
+    (encoding-spec [_] ::base-encoding)))
+
+
+(def int8 (reify-primitive Byte .get .put byte))
+(def int16 (reify-primitive Short .getShort .putShort short))
+(def int32 (reify-primitive Integer .getInt .putInt int))
+(def int64 (reify-primitive Long .getLong .putLong long))
+
+(def uint8 (reify-primitive Byte .get .put unchecked-byte Byte/toUnsignedLong))
+(def uint16 (reify-primitive Short .getShort .putShort unchecked-short Short/toUnsignedLong))
+(def uint32 (reify-primitive Integer .getInt .putInt unchecked-int Integer/toUnsignedLong))
+
+(def float32 (reify-primitive Float .getFloat .putFloat float))
+(def float64 (reify-primitive Double .getDouble .putDouble double))
+
