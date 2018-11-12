@@ -1,7 +1,8 @@
 (ns edn-to-binary.core
   (:import java.nio.ByteBuffer)
   (:import java.nio.ByteOrder)
-  (:require [clojure.spec.alpha :as s]))
+  (:require [clojure.spec.alpha :as s]
+            [clojure.set :as set]))
 
 
 ; (defprotocol Codec
@@ -83,7 +84,11 @@
                             when encoding (e.g. position or number of elements in an array)
 
                             A decoder function returns a vector of [data bytes-read remaining-bytes]")
-  (encoding-spec [this] "Returns a spec for the encoder and decoder functions of this codec"))
+  (encoding-spec [this] "Returns a set of keyword specs that this Codec expects to have defined in the encoding
+                        The encoding is a map that is expected to conform to a spec written like (s/keys :req [~@(encoding-spec this)])
+
+                        (The reason this is returning just the keywords instead of a fully reified spec is because it removes
+                        much of the complexity in this protocol to not have to worry about making the call to spec macros.)"))
 
 (s/def ::word-size #{1 2 4 8})
 (s/def ::order #{:little :big :network :native})
@@ -94,6 +99,7 @@
                 :network ByteOrder/BIG_ENDIAN})
 
 (s/def ::base-encoding (s/keys :req [::word-size ::order]))
+(def base-encoding-keys #{::word-size ::order})
 
 (def default-encoding {::word-size 1 ::order :little})
 
@@ -114,9 +120,7 @@
                            (get order-map (::order encoding)))
               _ (put-buffer buff data)
               encoded-data (seq (.array buff))]
-          (if (> alignment 1)
-            (cons (Alignment. alignment) encoded-data)
-            encoded-data))))
+          (cons (Alignment. alignment) encoded-data))))
     (decoder [_ encoding]
       (fn decoding-fn
         ([binary] (decoding-fn binary {::position 0}))
@@ -129,7 +133,7 @@
                data (get-buffer buff)
                remaining (drop size aligned-binary)]
            [data (+ size bytes-to-align) remaining]))))
-    (encoding-spec [_] ::base-encoding)))
+    (encoding-spec [_] base-encoding-keys)))
 
 
 (def int8 (reify-primitive Byte .get .put byte))
@@ -143,4 +147,34 @@
 
 (def float32 (reify-primitive Float .getFloat .putFloat float))
 (def float64 (reify-primitive Double .getDouble .putDouble double))
+
+(def max-codec-spec-merge 1000)
+
+;;TODO Figure out way to get alignment in sequence
+(defn codec-seq [codecs]
+  (reify Codec
+    (encoder [_ encoding]
+      (let [encoders (map #(encoder %1 encoding) codecs)]
+        (fn [data]
+          (let [encoded-data (map #(%1 %2) encoders data)]
+            encoded-data))))
+    (decoder [_ encoding]
+      (let [decoders (map #(decoder %1 encoding) codecs)]
+        (fn decoding-fn
+          ([binary])
+          ([binary decoding-args])
+          )))
+    (encoding-spec [_] (apply set/union 
+                                   (map encoding-spec (take max-codec-spec-merge codecs))))))
+
+(defn array 
+  ([codec])
+  ([n codec]))
+
+(defn tuple [& codecs])
+
+(defn struct [key codec & kcpairs])
+
+
+
 
