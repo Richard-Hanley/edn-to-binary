@@ -51,7 +51,7 @@
       (repeat padding (byte 0)))))
 
 
-(defn align [align-to]
+(defn make-alignment [align-to]
   (map->Alignment {:align-to align-to}))
 
 (defn 
@@ -75,13 +75,23 @@
 
 (defprotocol Codec
   (encoder [this encoding] "Encoder creates a function that will take data, and return a binary collection")
-  (decoder [this encodings] "Decoder creates a function that will take a sequence of bytes, and return a vector
-                            that contains a parsed piece of data, and any remaining bytes not consumed during the decoding")
-  (encoding-spec [this]))
+  (decoder [this encodings] "A decoder works like an encoder, but the function is a bit more complicated
+                            
+                            The decoder function that is returned takes a sequence of binary data, and an 
+                            optional map of decoder arguments.  The decoder arguments can be used to specify
+                            additional type information that may have been stripped from the binary edn data type
+                            when encoding (e.g. position or number of elements in an array)
+
+                            A decoder function returns a vector of [data bytes-read remaining-bytes]")
+  (encoding-spec [this] "Returns a spec for the encoder and decoder functions of this codec"))
 
 (s/def ::word-size #{1 2 4 8})
 (s/def ::order #{:little :big :network :native})
 
+(def order-map {:little ByteOrder/LITTLE_ENDIAN
+                :big ByteOrder/BIG_ENDIAN
+                :native (ByteOrder/nativeOrder)
+                :network ByteOrder/BIG_ENDIAN})
 
 (s/def ::base-encoding (s/keys :req [::word-size ::order]))
 
@@ -99,15 +109,26 @@
   (reify Codec
     (encoder [_ encoding]
       (fn [data]
-        (let [buff (ByteBuffer/allocate size)
-              _ (put-buffer buff data)]
-          (seq (.array buff)))))
+        (let [alignment (min size (::word-size encoding))
+              buff (.order (ByteBuffer/allocate size)
+                           (get order-map (::order encoding)))
+              _ (put-buffer buff data)
+              encoded-data (seq (.array buff))]
+          (if (> alignment 1)
+            (cons (Alignment. alignment) encoded-data)
+            encoded-data))))
     (decoder [_ encoding]
-      (fn [binary]
-        (let [buff (ByteBuffer/wrap (byte-array (take size binary)))
-              data (get-buffer buff)
-              remaining (drop size binary)]
-          [data remaining])))
+      (fn decoding-fn
+        ([binary] (decoding-fn binary {::position 0}))
+        ([binary decoding-args]
+         (let [alignment (min size (::word-size encoding))
+               bytes-to-align (alignment-padding alignment (::position decoding-args))
+               aligned-binary (drop bytes-to-align binary)
+               buff (.order (ByteBuffer/wrap (byte-array (take size aligned-binary)))
+                            (get order-map (::order encoding)))
+               data (get-buffer buff)
+               remaining (drop size aligned-binary)]
+           [data (+ size bytes-to-align) remaining]))))
     (encoding-spec [_] ::base-encoding)))
 
 
