@@ -26,6 +26,7 @@
 (defprotocol BinaryField
   (binary-seq [this meta]))
 
+
 (extend-protocol BinaryField
   Byte
   (binary-seq [this _] (cons this '()))
@@ -51,6 +52,28 @@
           padding (alignment-padding align-to position)]
       (repeat padding (byte 0)))))
 
+(defn alignment? [maybe-alignment] (instance? Alignment maybe-alignment))
+
+
+(defprotocol BinaryCollection
+  (coll-alignment [coll])
+  (binary-field-seq [coll]))
+
+(extend-protocol BinaryCollection
+  clojure.lang.ISeq
+  (coll-alignment [coll]
+    (let [head (first coll)]
+      (if (alignment? head)
+        (:align-to head)
+        1)))
+  (binary-field-seq [coll] coll)
+  clojure.lang.IPersistentMap
+  (coll-alignment [coll]
+    (let [head (::alignment coll)]
+      (if (alignment? head)
+        (:align-to head)
+        1)))
+  (binary-field-seq [coll] (vals coll)))
 
 (defn make-alignment [align-to]
   (map->Alignment {:align-to align-to}))
@@ -72,6 +95,9 @@
             (reduce xf result input-bytes)))))))
    ([binary-stream]
    (sequence (serialize) binary-stream)))
+
+(defn to-binary [binary-coll]
+  (serialize (flatten (binary-field-seq binary-coll))))
 
 
 (defprotocol Codec
@@ -149,9 +175,6 @@
 (def float32 (reify-primitive Float .getFloat .putFloat float))
 (def float64 (reify-primitive Double .getDouble .putDouble double))
 
-(def max-codec-spec-merge 1000)
-
-;;TODO Figure out way to get alignment in sequence
 (defn codec-seq [codecs]
   (reify Codec
     (encoder [_ encoding]
@@ -159,8 +182,9 @@
         (fn [data]
           ;; Pad the data with nil to make sure all of the neoc
           ;; That way all of the encoders will be sent data
-          (let [encoded-data (map #(%1 %2) encoders (concat data (repeat nil)))]
-            encoded-data))))
+          (let [encoded-data (map #(%1 %2) encoders (concat data (repeat nil)))
+                encoded-alignment (make-alignment (apply max (map coll-alignment encoded-data)))]
+            (cons encoded-alignment encoded-data)))))
     (decoder [_ encoding]
       (let [decoders (map #(decoder %1 encoding) codecs)]
         (fn decoding-fn
@@ -175,8 +199,9 @@
     (encoder [_ encoding]
       (let [encoders (map #(encoder %1 encoding) codecs)]
         (fn [data]
-          (let [encoded-data (map #(%1 %2) encoders data)]
-            encoded-data))))
+          (let [encoded-data (map #(%1 %2) encoders data)
+                encoded-alignment (make-alignment (apply max (map coll-alignment encoded-data)))]
+            (cons encoded-alignment encoded-data)))))
     (decoder [_ encoding]
       (let [decoders (map #(decoder %1 encoding) codecs)]
         (fn decoding-fn
@@ -192,21 +217,21 @@
 (defn tuple [& codecs] (codec-seq codecs))
 
 (defn struct [key codec & kcs]
-  (let [ks nil
-        codecs nil
+  (let [key-codec-pairs (partition 2 (concat [key codec] kcs))
+        ks (map first key-codec-pairs)
+        codecs (map second key-codec-pairs)
         raw-codec (codec-seq codecs)]
     (reify Codec
       (encoder [_ encoding]
         (let [raw-encoder (encoder raw-codec encoding)]
           (fn [data]
-            (let [values (map #(%1 data) data)]
-              (raw-encoder values)))))
-          (decoder [_ encoding]
+            (let [values (map #(%1 data) ks)
+                  encoded-values (raw-encoder values)
+                  encoded-keys (cons ::alignment ks)
+                  encoded-entries (map #(clojure.lang.MapEntry. %1 %2) encoded-keys encoded-values)]
+              (into (array-map) encoded-entries)))))
+      (decoder [_ encoding]
         (fn decoding-fn
           ([binary])
           ([binary decoding-args])))
       (encoding-spec [_] (encoding-spec raw-codec)))))
-
-
-
-
