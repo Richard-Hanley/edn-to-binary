@@ -118,7 +118,8 @@
         (let [alignment (min size (::word-size encoding))
               buff (.order (ByteBuffer/allocate size)
                            (get order-map (::order encoding)))
-              _ (put-buffer buff data)
+              ;; In case a nil valeu is passed, set the data to 0
+              _ (put-buffer buff (or data 0))
               encoded-data (seq (.array buff))]
           (cons (Alignment. alignment) encoded-data))))
     (decoder [_ encoding]
@@ -156,7 +157,9 @@
     (encoder [_ encoding]
       (let [encoders (map #(encoder %1 encoding) codecs)]
         (fn [data]
-          (let [encoded-data (map #(%1 %2) encoders data)]
+          ;; Pad the data with nil to make sure all of the neoc
+          ;; That way all of the encoders will be sent data
+          (let [encoded-data (map #(%1 %2) encoders (concat data (repeat nil)))]
             encoded-data))))
     (decoder [_ encoding]
       (let [decoders (map #(decoder %1 encoding) codecs)]
@@ -165,15 +168,44 @@
           ([binary decoding-args])
           )))
     (encoding-spec [_] (apply set/union 
-                                   (map encoding-spec (take max-codec-spec-merge codecs))))))
+                                   (map encoding-spec codecs)))))
+
+(defn codec-seq-infinite [specs codecs]
+  (reify Codec
+    (encoder [_ encoding]
+      (let [encoders (map #(encoder %1 encoding) codecs)]
+        (fn [data]
+          (let [encoded-data (map #(%1 %2) encoders data)]
+            encoded-data))))
+    (decoder [_ encoding]
+      (let [decoders (map #(decoder %1 encoding) codecs)]
+        (fn decoding-fn
+          ([binary])
+          ([binary decoding-args])
+          )))
+    (encoding-spec [_] specs)))
 
 (defn array 
-  ([codec])
-  ([n codec]))
+  ([codec] (codec-seq-infinite (encoding-spec codec) (repeat codec)))
+  ([n codec] (codec-seq (repeat n codec))))
 
-(defn tuple [& codecs])
+(defn tuple [& codecs] (codec-seq codecs))
 
-(defn struct [key codec & kcpairs])
+(defn struct [key codec & kcs]
+  (let [ks nil
+        codecs nil
+        raw-codec (codec-seq codecs)]
+    (reify Codec
+      (encoder [_ encoding]
+        (let [raw-encoder (encoder raw-codec encoding)]
+          (fn [data]
+            (let [values (map #(%1 data) data)]
+              (raw-encoder values)))))
+          (decoder [_ encoding]
+        (fn decoding-fn
+          ([binary])
+          ([binary decoding-args])))
+      (encoding-spec [_] (encoding-spec raw-codec)))))
 
 
 
