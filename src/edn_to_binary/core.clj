@@ -134,8 +134,8 @@
   ([class get put coerce-to coerce-from]
    (let [size `(. ~class BYTES)
          get-fn `#(~coerce-from (~get %))
-        put-fn `#(~put %1 (~coerce-to %2))]
-    `(primitive-impl ~size ~get-fn ~put-fn))))
+         put-fn `#(~put %1 (~coerce-to %2))]
+     `(primitive-impl ~size ~get-fn ~put-fn))))
 
 (defn primitive-impl [size get-buffer put-buffer]
   (reify Codec
@@ -162,18 +162,46 @@
            [data (+ size bytes-to-align) remaining]))))
     (encoding-spec [_] base-encoding-keys)))
 
+(defmacro signed-primitive-spec [class]
+  `#(<= (. ~class MIN_VALUE) %1 (. ~class MAX_VALUE)))
 
-(def int8 (reify-primitive Byte .get .put byte))
-(def int16 (reify-primitive Short .getShort .putShort short))
-(def int32 (reify-primitive Integer .getInt .putInt int))
-(def int64 (reify-primitive Long .getLong .putLong long))
+(defmacro unsigned-primitive-spec [class]
+  `(s/int-in 0 (bit-shift-left 1 (. ~class SIZE))))
 
-(def uint8 (reify-primitive Byte .get .put unchecked-byte Byte/toUnsignedLong))
-(def uint16 (reify-primitive Short .getShort .putShort unchecked-short Short/toUnsignedLong))
-(def uint32 (reify-primitive Integer .getInt .putInt unchecked-int Integer/toUnsignedLong))
+(defn get-codec-spec [codec]
+  (or (::spec (meta codec))
+      identity))
 
-(def float32 (reify-primitive Float .getFloat .putFloat float))
-(def float64 (reify-primitive Double .getDouble .putDouble double))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(def int8 (with-meta (reify-primitive Byte .get .put byte)
+                     {::spec (signed-primitive-spec Byte)}))
+
+(def int16 (with-meta (reify-primitive Short .getShort .putShort short)
+                      {::spec (signed-primitive-spec Short)}))
+
+(def int32 (with-meta (reify-primitive Integer .getInt .putInt int)
+                      {::spec (signed-primitive-spec Integer)}))
+
+(def int64 (with-meta (reify-primitive Long .getLong .putLong long)
+                      {::spec (signed-primitive-spec Long)}))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(def uint8 (with-meta (reify-primitive Byte .get .put unchecked-byte Byte/toUnsignedLong)
+                      {::spec (unsigned-primitive-spec Byte)}))
+
+(def uint16 (with-meta (reify-primitive Short .getShort .putShort unchecked-short Short/toUnsignedLong)
+                       {::spec (unsigned-primitive-spec Short)}))
+
+(def uint32 (with-meta (reify-primitive Integer .getInt .putInt unchecked-int Integer/toUnsignedLong)
+                       {::spec (unsigned-primitive-spec Integer)}))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(def float32 (with-meta (reify-primitive Float .getFloat .putFloat float)
+                        {::spec (signed-primitive-spec Float)}))
+
+(def float64 (with-meta (reify-primitive Double .getDouble .putDouble double)
+                        {::spec (signed-primitive-spec Double)}))
 
 (defn codec-seq [codecs]
   (reify Codec
