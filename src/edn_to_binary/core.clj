@@ -4,25 +4,6 @@
   (:require [clojure.spec.alpha :as s]
             [clojure.set :as set]))
 
-
-; (defprotocol Codec
-;   (alignment* [this])
-;   (encode* [this data])
-;   (decode* [this binary])
-;   (encoding* [this] "Returns the encoding map of the passed Codec")
-;   (encoding-format* [this])
-  ; (recode [this new-encoding] "Returns a new Codec with a the new encoding"))
-
-; (defn encode [codec data])
-
-; (defn decode [codec binary])
-
-; (defn indexed-binary-xform []
-;   (map-indexed vector))
-
-; ; (defn serialize [binary] (byte-array (mapcat unchecked-byte binary)))
-; (defn serialize [binary] (byte-array (map unchecked-byte binary)))
-
 (defprotocol BinaryField
   (binary-seq [this meta]))
 
@@ -93,7 +74,7 @@
                 input-bytes (binary-seq input {:position current-length})]
             (vreset! length (+ (count input-bytes) current-length))
             (reduce xf result input-bytes)))))))
-   ([binary-stream]
+  ([binary-stream]
    (sequence (serialize) binary-stream)))
 
 (defn to-binary [binary-coll]
@@ -101,20 +82,62 @@
 
 
 (defprotocol Codec
-  (encoder [this encoding] "Encoder creates a function that will take data, and return a binary collection")
-  (decoder [this encodings] "A decoder works like an encoder, but the function is a bit more complicated
-                            
-                            The decoder function that is returned takes a sequence of binary data, and an 
-                            optional map of decoder arguments.  The decoder arguments can be used to specify
-                            additional type information that may have been stripped from the binary edn data type
-                            when encoding (e.g. position or number of elements in an array)
+  (encoder* [this encoding] "Encoder creates a function that will take data, and return a binary collection")
+  (decoder* [this encodings] "A decoder works like an encoder, but the function is a bit more complicated
 
-                            A decoder function returns a vector of [data bytes-read remaining-bytes]")
-  (encoding-spec [this] "Returns a set of keyword specs that this Codec expects to have defined in the encoding
-                        The encoding is a map that is expected to conform to a spec written like (s/keys :req [~@(encoding-spec this)])
+                             The decoder function that is returned takes a sequence of binary data, and an 
+                             optional map of decoder arguments.  The decoder arguments can be used to specify
+                             additional type information that may have been stripped from the binary edn data type
+                             when encoding (e.g. position or number of elements in an array)
 
-                        (The reason this is returning just the keywords instead of a fully reified spec is because it removes
-                        much of the complexity in this protocol to not have to worry about making the call to spec macros.)"))
+                             A decoder function returns a vector of [data bytes-read remaining-bytes]")
+  (encoding-spec* [this] "Returns a set of keyword specs that this Codec expects to have defined in the encoding
+                         The encoding is a map that is expected to conform to a spec written like (s/keys :req [~@(encoding-spec this)])
+
+                         (The reason this is returning just the keywords instead of a fully reified spec is because it removes
+                         much of the complexity in this protocol to not have to worry about making the call to spec macros.)"))
+
+(defn get-codec-spec [codec]
+  (or (::spec (meta codec))
+      identity))
+
+(defonce ^:private registry-ref (atom {}))
+
+(defn registry
+  "returns the registry map, prefer 'get-codec' to lookup a codec by name"
+  []
+  @registry-ref)
+
+(defn register-codec [k c]
+  (swap! registry-ref assoc k c))
+
+(defmacro def 
+  "Given a namespace qualified keyword k, this will register the codec and assocaited
+  spec to k.  The spec is assumed to be part of the metadata of the passed codec"
+  [k codec]
+  `(do 
+     (register-codec ~k ~codec)
+     (s/def ~k (get-codec-spec ~codec))))
+
+
+(defn encoder [k-or-c encoding]
+  (let [codec (if (keyword? k-or-c) 
+                (get (registry) k-or-c)
+                k-or-c)]
+    (encoder* codec encoding)))
+
+(defn decoder [k-or-c encoding]
+  (let [codec (if (keyword? k-or-c) 
+                (get (registry) k-or-c)
+                k-or-c)]
+    (decoder* codec encoding)))
+
+(defn encoding-spec [k-or-c]
+  (let [codec (if (keyword? k-or-c) 
+                (get (registry) k-or-c)
+                k-or-c)]
+    (encoding-spec* codec)))
+
 
 (s/def ::word-size #{1 2 4 8})
 (s/def ::order #{:little :big :network :native})
@@ -139,7 +162,7 @@
 
 (defn primitive-impl [size get-buffer put-buffer]
   (reify Codec
-    (encoder [_ encoding]
+    (encoder* [_ encoding]
       (fn [data]
         (let [alignment (min size (::word-size encoding))
               buff (.order (ByteBuffer/allocate size)
@@ -148,7 +171,7 @@
               _ (put-buffer buff (or data 0))
               encoded-data (seq (.array buff))]
           (cons (Alignment. alignment) encoded-data))))
-    (decoder [_ encoding]
+    (decoder* [_ encoding]
       (fn decoding-fn
         ([binary] (decoding-fn binary {::position 0}))
         ([binary decoding-args]
@@ -160,7 +183,7 @@
                data (get-buffer buff)
                remaining (drop size aligned-binary)]
            [data (+ size bytes-to-align) remaining]))))
-    (encoding-spec [_] base-encoding-keys)))
+    (encoding-spec* [_] base-encoding-keys)))
 
 (defmacro signed-primitive-spec [class]
   `#(<= (. ~class MIN_VALUE) %1 (. ~class MAX_VALUE)))
@@ -168,44 +191,39 @@
 (defmacro unsigned-primitive-spec [class]
   `(s/int-in 0 (bit-shift-left 1 (. ~class SIZE))))
 
-(defn get-codec-spec [codec]
-  (or (::spec (meta codec))
-      identity))
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(def int8 (with-meta (reify-primitive Byte .get .put byte)
-                     {::spec (signed-primitive-spec Byte)}))
+(edn-to-binary.core/def ::int8 (with-meta (reify-primitive Byte .get .put byte)
+                                          {::spec (signed-primitive-spec Byte)}))
 
-(def int16 (with-meta (reify-primitive Short .getShort .putShort short)
-                      {::spec (signed-primitive-spec Short)}))
+(edn-to-binary.core/def ::int16 (with-meta (reify-primitive Short .getShort .putShort short)
+                                           {::spec (signed-primitive-spec Short)}))
 
-(def int32 (with-meta (reify-primitive Integer .getInt .putInt int)
-                      {::spec (signed-primitive-spec Integer)}))
+(edn-to-binary.core/def ::int32 (with-meta (reify-primitive Integer .getInt .putInt int)
+                                           {::spec (signed-primitive-spec Integer)}))
 
-(def int64 (with-meta (reify-primitive Long .getLong .putLong long)
-                      {::spec (signed-primitive-spec Long)}))
+(edn-to-binary.core/def ::int64 (with-meta (reify-primitive Long .getLong .putLong long)
+                                           {::spec (signed-primitive-spec Long)}))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(def uint8 (with-meta (reify-primitive Byte .get .put unchecked-byte Byte/toUnsignedLong)
-                      {::spec (unsigned-primitive-spec Byte)}))
+(edn-to-binary.core/def ::uint8 (with-meta (reify-primitive Byte .get .put unchecked-byte Byte/toUnsignedLong)
+                                           {::spec (unsigned-primitive-spec Byte)}))
 
-(def uint16 (with-meta (reify-primitive Short .getShort .putShort unchecked-short Short/toUnsignedLong)
-                       {::spec (unsigned-primitive-spec Short)}))
+(edn-to-binary.core/def ::uint16 (with-meta (reify-primitive Short .getShort .putShort unchecked-short Short/toUnsignedLong)
+                                            {::spec (unsigned-primitive-spec Short)}))
 
-(def uint32 (with-meta (reify-primitive Integer .getInt .putInt unchecked-int Integer/toUnsignedLong)
-                       {::spec (unsigned-primitive-spec Integer)}))
+(edn-to-binary.core/def ::uint32 (with-meta (reify-primitive Integer .getInt .putInt unchecked-int Integer/toUnsignedLong)
+                                            {::spec (unsigned-primitive-spec Integer)}))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(def float32 (with-meta (reify-primitive Float .getFloat .putFloat float)
-                        {::spec (signed-primitive-spec Float)}))
+(edn-to-binary.core/def ::float32 (with-meta (reify-primitive Float .getFloat .putFloat float)
+                                             {::spec (signed-primitive-spec Float)}))
 
-(def float64 (with-meta (reify-primitive Double .getDouble .putDouble double)
-                        {::spec (signed-primitive-spec Double)}))
+(edn-to-binary.core/def ::float64 (with-meta (reify-primitive Double .getDouble .putDouble double)
+                                             {::spec (signed-primitive-spec Double)}))
 
 (defn codec-seq [codecs]
   (reify Codec
-    (encoder [_ encoding]
+    (encoder* [_ encoding]
       (let [encoders (map #(encoder %1 encoding) codecs)]
         (fn [data]
           ;; Pad the data with nil to make sure all of the neoc
@@ -213,33 +231,33 @@
           (let [encoded-data (map #(%1 %2) encoders (concat data (repeat nil)))
                 encoded-alignment (make-alignment (apply max (map coll-alignment encoded-data)))]
             (cons encoded-alignment encoded-data)))))
-    (decoder [_ encoding]
+    (decoder* [_ encoding]
       (let [decoders (map #(decoder %1 encoding) codecs)]
         (fn decoding-fn
           ([binary])
           ([binary decoding-args])
           )))
-    (encoding-spec [_] (apply set/union 
-                                   (map encoding-spec codecs)))))
+    (encoding-spec* [_] (apply set/union 
+                               (map encoding-spec codecs)))))
 
 (defn codec-seq-infinite [specs codecs]
   (reify Codec
-    (encoder [_ encoding]
+    (encoder* [_ encoding]
       (let [encoders (map #(encoder %1 encoding) codecs)]
         (fn [data]
           (let [encoded-data (map #(%1 %2) encoders data)
                 encoded-alignment (make-alignment (apply max (map coll-alignment encoded-data)))]
             (cons encoded-alignment encoded-data)))))
-    (decoder [_ encoding]
+    (decoder* [_ encoding]
       (let [decoders (map #(decoder %1 encoding) codecs)]
         (fn decoding-fn
           ([binary])
           ([binary decoding-args])
           )))
-    (encoding-spec [_] specs)))
+    (encoding-spec* [_] specs)))
 
 (defn array 
-  ([codec] (codec-seq-infinite (encoding-spec codec) (repeat codec)))
+  ([codec] (codec-seq-infinite (encoding-spec* codec) (repeat codec)))
   ([n codec] (codec-seq (repeat n codec))))
 
 (defn tuple [& codecs] (codec-seq codecs))
@@ -250,16 +268,16 @@
         codecs (map second key-codec-pairs)
         raw-codec (codec-seq codecs)]
     (reify Codec
-      (encoder [_ encoding]
-        (let [raw-encoder (encoder raw-codec encoding)]
+      (encoder* [_ encoding]
+        (let [raw-encoder (encoder* raw-codec encoding)]
           (fn [data]
             (let [values (map #(%1 data) ks)
                   encoded-values (raw-encoder values)
                   encoded-keys (cons ::alignment ks)
                   encoded-entries (map #(clojure.lang.MapEntry. %1 %2) encoded-keys encoded-values)]
               (into (array-map) encoded-entries)))))
-      (decoder [_ encoding]
+      (decoder* [_ encoding]
         (fn decoding-fn
           ([binary])
           ([binary decoding-args])))
-      (encoding-spec [_] (encoding-spec raw-codec)))))
+      (encoding-spec* [_] (encoding-spec* raw-codec)))))
