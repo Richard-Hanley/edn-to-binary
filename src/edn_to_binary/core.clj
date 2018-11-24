@@ -98,8 +98,10 @@
                          much of the complexity in this protocol to not have to worry about making the call to spec macros.)"))
 
 (defn get-codec-spec [codec]
-  (or (::spec (meta codec))
-      identity))
+  (if (keyword? codec)
+    codec
+    (or (::spec (meta codec))
+        identity)))
 
 (defonce ^:private registry-ref (atom {}))
 
@@ -256,13 +258,37 @@
           )))
     (encoding-spec* [_] specs)))
 
-(defn array 
-  ([codec] (codec-seq-infinite (encoding-spec* codec) (repeat codec)))
+(defn array-impl 
+  ([codec] (codec-seq-infinite (encoding-spec codec) (repeat codec)))
   ([n codec] (codec-seq (repeat n codec))))
 
-(defn tuple [& codecs] (codec-seq codecs))
+(defmacro array 
+  [codec & {:keys [into kind count max-count min-count distinct gen-max gen]}]
+  (let [c `(if (some? ~count)
+             (array-impl ~count ~codec )
+             (array-impl ~codec))]
+    `(with-meta ~c
+                {::spec (s/coll-of ~(get-codec-spec codec) 
+                                   :into ~into
+                                   :kind ~kind
+                                   :count ~count
+                                   :max-count ~max-count
+                                   :min-count ~min-count
+                                   :distinct ~distinct
+                                   :gen-max ~gen-max
+                                   :gen ~gen)})))
 
-(defn struct [key codec & kcs]
+
+
+(defn tuple-impl [codecs] (codec-seq codecs))
+
+(defmacro tuple [& codecs]
+  (let [cs (map #(list get-codec-spec %) codecs)]
+    `(with-meta (tuple-impl ~codecs)
+                {::spec (s/tuple ~@cs)})))
+                                
+
+(defn struct-impl [key codec & kcs]
   (let [key-codec-pairs (partition 2 (concat [key codec] kcs))
         ks (map first key-codec-pairs)
         codecs (map second key-codec-pairs)
