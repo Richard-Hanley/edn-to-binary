@@ -132,11 +132,19 @@
 
 (defmacro def 
   "Given a namespace qualified keyword k, this will register the codec and assocaited
-  spec to k.  The spec is assumed to be part of the metadata of the passed codec"
-  [k codec]
+  spec to k.  The spec is assumed to be part of the metadata of the passed codec
+
+  Additional agruments are supported.  Using a :spec or :post-spec argument will add in
+  extra specs that might not be part of the passed codec.  The resulting spec will be 
+  of the form `(s/and spec codec post-spec) "
+  [k codec & {:keys [spec post-spec] 
+              :or {spec identity post-spec identity}}]
   `(do 
      (register-codec ~k ~codec)
-     (s/def ~k (get-codec-spec ~codec))))
+     (s/def ~k (s/and
+                 ~spec
+                 (get-codec-spec ~codec)
+                 ~post-spec))))
 
 
 (defn encoder [k-or-c encoding]
@@ -324,31 +332,8 @@
           ([binary decoding-args])))
       (encoding-spec* [_] (encoding-spec raw-codec)))))
 
-
-; (defmacro struct [& codec-keys]
-;   (let [qualify (fn [form]
-;                   (if (vector? form)
-;                     form
-;                     [:qualified form]))
-;         qualified-key-pairs (map #(list qualify %) codec-keys)
-;         unqualified? (fn [[qual k]] (#{:unqualified} qual))
-;         req `[:req [~@(filter (complement unqualified?) qualified-key-pairs)]]
-;         ]
-    ; `[~@req]))
-
+;TODO: Figure out how to use unqualified keywords
 (defmacro struct [& codec-keys]
   `(with-meta (struct-impl (map #(repeat 2 %) [~@codec-keys]))
               {::spec (s/keys :req [~@codec-keys])}))
 
-
-
-; (defmacro struct [& codec-keys]
-;   (let [qualify (fn [form]
-;                   (if (vector? form)
-;                     form
-;                     [:qualified form]))
-;         qualified-key-pairs (map #(list qualify %) codec-keys)
-;         unqualified? (fn [[qual k]] (#{:unqualified} qual))
-;         req (map #(list second %) (filter unqualified? qualified-key-pairs))
-;         spec-args `[:req [~@req]]]
-;     `~spec-args))
