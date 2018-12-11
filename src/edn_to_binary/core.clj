@@ -110,6 +110,23 @@
   []
   @registry-ref)
 
+(defn- named? [x] (instance? clojure.lang.Named x))
+
+(defn- with-name [codec name]
+  (with-meta codec (assoc (meta codec) ::name name)))
+
+(defn reg-resolve
+  "returns the codec end of alias chain starting with k, nil if not found, k if k not Named"
+  [k]
+  (if (named? k)
+    (let [reg @registry-ref]
+      (loop [codec k]
+        (if (named? codec)
+          (recur (get reg codec))
+          (when codec
+            (with-name codec k)))))
+    k))
+
 (defn register-codec [k c]
   (swap! registry-ref assoc k c))
 
@@ -124,19 +141,19 @@
 
 (defn encoder [k-or-c encoding]
   (let [codec (if (keyword? k-or-c) 
-                (get (registry) k-or-c)
+                (reg-resolve k-or-c)
                 k-or-c)]
     (encoder* codec encoding)))
 
 (defn decoder [k-or-c encoding]
   (let [codec (if (keyword? k-or-c) 
-                (get (registry) k-or-c)
+                (reg-resolve k-or-c)
                 k-or-c)]
     (decoder* codec encoding)))
 
 (defn encoding-spec [k-or-c]
   (let [codec (if (keyword? k-or-c) 
-                (get (registry) k-or-c)
+                (reg-resolve k-or-c)
                 k-or-c)]
     (encoding-spec* codec)))
 
@@ -288,14 +305,13 @@
                 {::spec (s/tuple ~@cs)})))
                                 
 
-(defn struct-impl [key codec & kcs]
-  (let [key-codec-pairs (partition 2 (concat [key codec] kcs))
-        ks (map first key-codec-pairs)
+(defn struct-impl [key-codec-pairs]
+  (let [ks (map first key-codec-pairs)
         codecs (map second key-codec-pairs)
         raw-codec (codec-seq codecs)]
     (reify Codec
       (encoder* [_ encoding]
-        (let [raw-encoder (encoder* raw-codec encoding)]
+        (let [raw-encoder (encoder raw-codec encoding)]
           (fn [data]
             (let [values (map #(%1 data) ks)
                   encoded-values (raw-encoder values)
@@ -306,4 +322,33 @@
         (fn decoding-fn
           ([binary])
           ([binary decoding-args])))
-      (encoding-spec* [_] (encoding-spec* raw-codec)))))
+      (encoding-spec* [_] (encoding-spec raw-codec)))))
+
+
+; (defmacro struct [& codec-keys]
+;   (let [qualify (fn [form]
+;                   (if (vector? form)
+;                     form
+;                     [:qualified form]))
+;         qualified-key-pairs (map #(list qualify %) codec-keys)
+;         unqualified? (fn [[qual k]] (#{:unqualified} qual))
+;         req `[:req [~@(filter (complement unqualified?) qualified-key-pairs)]]
+;         ]
+    ; `[~@req]))
+
+(defmacro struct [& codec-keys]
+  `(with-meta (struct-impl (map #(repeat 2 %) [~@codec-keys]))
+              {::spec (s/keys :req [~@codec-keys])}))
+
+
+
+; (defmacro struct [& codec-keys]
+;   (let [qualify (fn [form]
+;                   (if (vector? form)
+;                     form
+;                     [:qualified form]))
+;         qualified-key-pairs (map #(list qualify %) codec-keys)
+;         unqualified? (fn [[qual k]] (#{:unqualified} qual))
+;         req (map #(list second %) (filter unqualified? qualified-key-pairs))
+;         spec-args `[:req [~@req]]]
+;     `~spec-args))
