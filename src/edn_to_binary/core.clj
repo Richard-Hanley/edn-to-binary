@@ -137,14 +137,18 @@
   Additional agruments are supported.  Using a :spec or :post-spec argument will add in
   extra specs that might not be part of the passed codec.  The resulting spec will be 
   of the form `(s/and spec codec post-spec) "
-  [k codec & {:keys [spec post-spec] 
+  ([k codec]
+  `(do 
+     (register-codec ~k ~codec)
+     (s/def ~k (get-codec-spec ~codec))))
+  ([k codec & {:keys [spec post-spec] 
               :or {spec identity post-spec identity}}]
   `(do 
      (register-codec ~k ~codec)
      (s/def ~k (s/and
                  ~spec
                  (get-codec-spec ~codec)
-                 ~post-spec))))
+                 ~post-spec)))))
 
 
 (defn encoder [k-or-c encoding]
@@ -337,3 +341,27 @@
   `(with-meta (struct-impl (map #(repeat 2 %) [~@codec-keys]))
               {::spec (s/keys :req [~@codec-keys])}))
 
+(defn multi-codec-impl [mm-codec]
+  (reify Codec
+    (encoder* [_ encoding] 
+      (fn [data]
+        (let [enc-fn (encoder (mm-codec data) encoding)]
+          (enc-fn data))))
+    (decoder* [_ encoding]
+      (fn decoding-fn
+        ([binary])
+        ([binary decoding-args])))
+      (encoding-spec* [_] nil)))
+
+(defmacro multi-codec 
+  "A multi-codec is an open way to delegate codecs.  It is significantly
+  slower, and cannot properly generate encoding-spec"
+  [mm-codec mm-spec retag]
+  `(with-meta (multi-codec-impl ~mm-codec)
+              {::spec (s/multi-spec ~mm-spec ~retag)}))
+
+(defmacro register-codec-method [mm-codec mm-spec dispatch-value codec-key]
+  `(do
+     (defmethod ~mm-spec ~dispatch-value [~'arg] ~codec-key)
+     (defmethod ~mm-codec ~dispatch-value [~'arg] ~codec-key)
+     nil))
