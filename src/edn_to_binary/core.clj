@@ -341,6 +341,24 @@
   `(with-meta (struct-impl (map #(repeat 2 %) [~@codec-keys]))
               {::spec (s/keys :req [~@codec-keys])}))
 
+;; TODO build up the encoding spec based on all the different forms of codecs
+(defn union-impl [& key-codec-pairs]
+  (let [codec-map (apply array-map key-codec-pairs)]
+    (reify Codec
+      (encoder* [_ encoding] 
+        (fn [[tag data]]
+          (let [c (get codec-map tag)]
+            (encoder c encoding))))
+      (decoder* [_ encoding]
+        (fn decoding-fn
+          ([binary])
+          ([binary decoding-args])))
+      (encoding-spec* [_] nil))))
+
+(defmacro union [& key-codec-pairs]
+  `(with-meta (union-impl ~@key-codec-pairs)
+              {::spec (s/or ~@key-codec-pairs)}))
+
 (defn multi-codec-impl [mm-codec]
   (reify Codec
     (encoder* [_ encoding] 
@@ -353,6 +371,8 @@
         ([binary decoding-args])))
       (encoding-spec* [_] nil)))
 
+;;TODO Have multi-codec get a list of all possible methods, and then use the dispatch
+;;function to figure out the encoder and encodings more readily
 (defmacro multi-codec 
   "A multi-codec is an open way to delegate codecs.  It is significantly
   slower, and cannot properly generate encoding-spec"
