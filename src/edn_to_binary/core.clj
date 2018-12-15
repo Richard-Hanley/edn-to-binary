@@ -121,5 +121,17 @@
         (apply binary-concat aligned-seq)
         aligned-seq)))
   clojure.lang.IPersistentMap
-  (encode* [this encoding]))
+  ;; A peristent map works like a sequntial collection, but there needs to be
+  ;; a way to order the collection.  If the order is specified in the metadata,
+  ;; then it will use that.  Otherwise the order will be based off a call to keys
+  (encode* [this encoding]
+    (let [m (meta this)
+          struct-order (or (::struct-order m) (keys this))
+          data-seq (reduce (fn [coll k] (conj coll (get this k)))
+                           []
+                           struct-order)
+          bin-seq (encode* (with-meta data-seq m) encoding)]
+      (if (::flatten encoding)
+        bin-seq
+        (zipmap struct-order bin-seq)))))
 
