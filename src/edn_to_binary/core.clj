@@ -53,6 +53,27 @@
   Double
   (encode* [this encoding] ((put-prim Double .putDouble) this encoding)))
 
+
+(defmacro signed-primitive-spec [class conv]
+  `(s/and #(<= (. ~class MIN_VALUE) %1 (. ~class MAX_VALUE))
+          (s/conformer ~conv)))
+
+(defmacro unsigned-primitive-spec [class conv]
+  `(s/and (s/int-in 0 (bit-shift-left 1 (. ~class SIZE)))
+          (s/conformer ~conv)))
+
+(s/def ::int8 (signed-primitive-spec Byte byte))
+(s/def ::int16 (signed-primitive-spec Short short))
+(s/def ::int32 (signed-primitive-spec Integer int))
+(s/def ::int64 (signed-primitive-spec Long long))
+
+(s/def ::uint8 (unsigned-primitive-spec Byte unchecked-byte))
+(s/def ::uint16 (unsigned-primitive-spec Short unchecked-short))
+(s/def ::uint32 (unsigned-primitive-spec Integer unchecked-int))
+
+(s/def ::float32 (signed-primitive-spec Float float))
+(s/def ::float64 (signed-primitive-spec Double double))
+
 (defn alignment [binary-seq]
   (or (::alignment (meta binary-seq)) 1))
 
@@ -134,4 +155,68 @@
       (if (::flatten encoding)
         bin-seq
         (zipmap struct-order bin-seq)))))
+
+(defn align [align-to index] 
+  (fn [metadata]
+    (update metadata ::force-align conj [index align-to])))
+
+; (defn push [& encoding-key-val-pairs]
+;   (fn [enc-stack]))
+
+; (defn pop []
+;   (fn [enc-stack]))
+
+(defmacro array 
+  [codec & {:keys [into kind count max-count min-count distinct gen-max gen]}]
+  )
+
+(defn res-pragma [pred-encoders]
+  (let [[specs pragmas _] (reduce (fn [[specs pragmas index] pred]
+                                    (if (and (seq? pred)
+                                             (= (first pred) :pragma))
+                                      (let [pragma-form (concat (rest pred) [index])]
+                                        [specs (conj pragmas pragma-form) index])
+                                      [(conj specs pred) pragmas (inc index)]))
+                                  [[] [] 0]
+                                  pred-encoders)]
+    [specs pragmas]))
+
+(defn unqualified [k] 
+  [k (-> k name keyword)])
+
+
+(defmacro tuple [& pred-encoders]
+  (let [[specs pragmas] (res-pragma pred-encoders)
+        metadata `(reduce #(%2 %1) {} ~pragmas)]
+    `(s/and (s/tuple ~@specs)
+           (s/conformer #(with-meta % ~metadata)))))
+    ; `[~specs ~metadata]))
+
+
+(defmacro struct [& key-pred-encoders]
+  (let [[specs pragmas] (res-pragma key-pred-encoders)
+        metadata `(reduce #(%2 %1) {} ~pragmas)
+        unk #(-> % name keyword)
+        [req req-un order] (reduce (fn [[req req-un order] f]
+                                     (cond 
+                                       (keyword? f) [(conj req f) req-un (conj order f)]
+                                       (and (seq? f)
+                                            (= (first f) :unqualified)) [req (conj req-un (second f)) (conj order (unk (second f)))]
+                                       :else (throw (ex-info "Struct field is not qualified keyword or unqualified sequence"
+                                                             {:field f}))))
+
+                               
+                             [[] [] []]
+                             specs)
+        ]
+    `(s/keys :req [~@req] :req-un [~@req-un])))
+
+; (def foo (tuple ::foo
+;                 ::bar
+;                 (pragma :align 16)
+;                 ::baz
+;                 (pragma ::order :big ::string :utf-16)
+;                 ::foo-string
+;                 (pragma :pop)
+;                 ::something-else))
 
