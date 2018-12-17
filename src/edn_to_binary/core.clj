@@ -167,8 +167,24 @@
 ;   (fn [enc-stack]))
 
 (defmacro array 
-  [codec & {:keys [into kind count max-count min-count distinct gen-max gen]}]
-  )
+  [enc-pred & {:keys [align encoding into kind count max-count min-count distinct gen-max gen]
+               :or {into []}}]
+  (let [meta-fn `(fn [coll#]
+                  (if ~align
+                    (assoc (meta coll#) 
+                           ::force-align (map-indexed vector (repeat (count coll#) ~align)))
+                   (meta coll#)))]
+  `(s/and (s/coll-of ~enc-pred 
+                     :into ~into
+                     :kind ~kind
+                     :count ~count
+                     :max-count ~max-count
+                     :min-count ~min-count
+                     :distinct ~distinct
+                     :gen-max ~gen-max
+                     :gen ~gen)
+          (s/conformer #(with-meta %
+                                   (~meta-fn %))))))
 
 (defn res-pragma [pred-encoders]
   (let [[specs pragmas _] (reduce (fn [[specs pragmas index] pred]
@@ -181,16 +197,12 @@
                                   pred-encoders)]
     [specs pragmas]))
 
-(defn unqualified [k] 
-  [k (-> k name keyword)])
-
-
 (defmacro tuple [& pred-encoders]
   (let [[specs pragmas] (res-pragma pred-encoders)
         metadata `(reduce #(%2 %1) {} ~pragmas)]
     `(s/and (s/tuple ~@specs)
-           (s/conformer #(with-meta % ~metadata)))))
-    ; `[~specs ~metadata]))
+           (s/conformer #(with-meta % 
+                                    (merge (meta %) ~metadata))))))
 
 
 (defmacro struct [& key-pred-encoders]
@@ -209,14 +221,7 @@
                              [[] [] []]
                              specs)
         ]
-    `(s/keys :req [~@req] :req-un [~@req-un])))
-
-; (def foo (tuple ::foo
-;                 ::bar
-;                 (pragma :align 16)
-;                 ::baz
-;                 (pragma ::order :big ::string :utf-16)
-;                 ::foo-string
-;                 (pragma :pop)
-;                 ::something-else))
-
+    `(s/and (s/keys :req [~@req] :req-un [~@req-un])
+            (s/conformer #(with-meta % 
+                                     (assoc (merge (meta %) ~metadata) 
+                                            ::struct-order ~order))))))
