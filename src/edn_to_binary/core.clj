@@ -4,9 +4,112 @@
   (:require [clojure.spec.alpha :as s]
             [clojure.set :as set]))
 
-(defprotocol Binary
-  (encode* [this encoding]))
+(defprotocol Codec
+  (alignment* [this])
+  (encode* [this data])
+  (decode* [this bin])
+  (recode* [this encoding]))
 
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Managing the codec registry and the spec metadata
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defmacro get-codec-spec [codec]
+  `(if (keyword? ~codec)
+    ~codec
+    (or (::spec (meta ~codec))
+        (throw (ex-info "No spec defined for given codec" {:codec ~codec})))))
+
+(defonce ^:private registry-ref (atom {}))
+
+(defn registry
+  "returns the registry map, prefer 'get-codec' to lookup a codec by name"
+  []
+  @registry-ref)
+
+(defn get-codec
+  "Returns the codec registered with the fully qualified keyword"
+  [k] (get @registry-ref k))
+
+(defn- named? [x] (instance? clojure.lang.Named x))
+
+(defn- with-name [codec name]
+  (with-meta codec (assoc (meta codec) ::name name)))
+
+(defn reg-resolve
+  "returns the codec end of alias chain starting with k, nil if not found, k if k not Named"
+  [k]
+  (if (named? k)
+    (let [reg @registry-ref]
+      (loop [codec k]
+        (if (named? codec)
+          (recur (get reg codec))
+          (when codec
+            (with-name codec k)))))
+    k))
+
+(defn register-codec [k c]
+  (swap! registry-ref assoc k c))
+
+(defmacro def 
+  "Given a namespace qualified keyword k, this will register the codec and assocaited
+  spec to k.  The spec is assumed to be part of the metadata of the passed codec
+
+  Additional agruments are supported.  Using a :spec or :post-spec argument will add in
+  extra specs that might not be part of the passed codec.  The resulting spec will be 
+  of the form `(s/and spec codec post-spec) "
+  [k codec & {:keys [spec post-spec]}]
+    (let [base-spec `(get-codec-spec ~codec)
+          final-spec (cond
+                       (and (some? spec) (some? post-spec)) `(s/and ~spec ~base-spec ~post-spec)
+                       (some? spec) `(s/and ~spec ~base-spec)
+                       (some? post-spec) `(s/and ~base-spec ~post-spec)
+                       :else `~base-spec)]
+  `(do 
+     (register-codec ~k ~codec)
+     (s/def ~k ~final-spec))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Wrappers for Codec protocol that look in the registry
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defn alignment [codec-form] 
+  (let [codec (if (keyword? codec-form) 
+                (reg-resolve codec-form)
+                codec-form)]
+    (alignment* codec)))
+
+(defn encode [codec-form data] 
+  (let [codec (if (keyword? codec-form) 
+                (reg-resolve codec-form)
+                codec-form)]
+    (encode* codec data)))
+
+(defn decode [codec-form bin] 
+  (let [codec (if (keyword? codec-form) 
+                (reg-resolve codec-form)
+                codec-form)]
+    (decode* codec bin)))
+
+(defn recode [codec-form & encoding-args] 
+  (let [codec (if (keyword? codec-form) 
+                (reg-resolve codec-form)
+                codec-form)]
+    (recode* codec (apply array-map encoding-args))))
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;Specs for encoding codecs
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defn power-of-2? 
+  "A number is a power of two if there is only one bit set"
+  [num]
+  (= (Long/lowestOneBit num) (Long/highestOneBit num)))
+
+(s/def ::alignment power-of-2?)
+
+(s/def ::force-alignment (s/nilable ::alignment))
 (s/def ::word-size #{1 2 4 8})
 (s/def ::order #{:little :big :network :native})
 (s/def ::flatten boolean?)
@@ -22,206 +125,162 @@
                        ::order :little
                        ::flatten true})
 
-(defn encode
-  ([data] (encode* data default-encoding))
-  ([data & encoding-key-vals] 
-   (let [encoding (apply array-map encoding-key-vals)]
-     (encode* data (merge default-encoding encoding)))))
-
-(defmacro put-prim [class put-method]
-  (let [size `(. ~class BYTES)]
-    `(fn [data# encoding#]
-       (let [{word-size# ::word-size
-              order# ::order} encoding#
-             buffer# (.order (ByteBuffer/allocate ~size)
-                            (get order-map order#))
-             align-to# (min word-size# ~size)]
-         (with-meta (seq (.array (~put-method buffer# data#)))
-                    {::alignment align-to#})))))
-
-(extend-protocol Binary
-  Byte
-  (encode* [this encoding] ((put-prim Byte .put) this encoding))
-  Short 
-  (encode* [this encoding] ((put-prim Short .putShort) this encoding))
-  Integer
-  (encode* [this encoding] ((put-prim Integer .putInt) this encoding))
-  Long
-  (encode* [this encoding] ((put-prim Long .putLong) this encoding))
-  Float
-  (encode* [this encoding] ((put-prim Float .putFloat) this encoding))
-  Double
-  (encode* [this encoding] ((put-prim Double .putDouble) this encoding)))
 
 
-(defmacro signed-primitive-spec [class conv]
-  `(s/and #(<= (. ~class MIN_VALUE) %1 (. ~class MAX_VALUE))
-          (s/conformer ~conv)))
+(defrecord PrimitiveCodec [size get-buffer put-buffer enc]
+  Codec
+  (alignment* [this]
+    (let [{:keys [::force-alignment ::word-size]} enc]
+      (or force-alignment
+          (min size word-size))))
+  (encode* [this data]
+    (let [buff (.order (ByteBuffer/allocate size)
+                       (get order-map (::order enc)))
+          _ (put-buffer buff (or data 0))]
+      (seq (.array buff))))
+  (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+  (recode* [this encoding] (update this :enc merge encoding)))
 
-(defmacro unsigned-primitive-spec [class conv]
-  `(s/and (s/int-in 0 (bit-shift-left 1 (. ~class SIZE)))
-          (s/conformer ~conv)))
+(defmacro reify-primitive 
+  ([class get put coerce-to] `(reify-primitive ~class ~get ~put ~coerce-to identity))
+  ([class get put coerce-to coerce-from]
+   (let [size `(. ~class BYTES)
+         get-fn `#(~coerce-from (~get %))
+         put-fn `#(~put %1 (~coerce-to %2))]
+     `(PrimitiveCodec. ~size ~get-fn ~put-fn default-encoding))))
 
-(s/def ::int8 (signed-primitive-spec Byte byte))
-(s/def ::int16 (signed-primitive-spec Short short))
-(s/def ::int32 (signed-primitive-spec Integer int))
-(s/def ::int64 (signed-primitive-spec Long long))
+(defmacro signed-primitive-spec [class]
+  `#(<= (. ~class MIN_VALUE) %1 (. ~class MAX_VALUE)))
 
-(s/def ::uint8 (unsigned-primitive-spec Byte unchecked-byte))
-(s/def ::uint16 (unsigned-primitive-spec Short unchecked-short))
-(s/def ::uint32 (unsigned-primitive-spec Integer unchecked-int))
+(defmacro unsigned-primitive-spec [class]
+  `(s/int-in 0 (bit-shift-left 1 (. ~class SIZE))))
 
-(s/def ::float32 (signed-primitive-spec Float float))
-(s/def ::float64 (signed-primitive-spec Double double))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Defining the primitive specs
 
-(defn alignment [binary-seq]
-  (or (::alignment (meta binary-seq)) 1))
+(def primitive-prototypes 
+  {:int8 (with-meta (reify-primitive Byte .get .put byte)
+                     {::spec (signed-primitive-spec Byte)})
 
-(defn update-alignment [binary-seq align-to]
-  (with-meta binary-seq
-             (assoc (meta binary-seq) ::alignment align-to)))
+   :int16 (with-meta (reify-primitive Short .getShort .putShort short)
+                      {::spec (signed-primitive-spec Short)})
 
-(defn make-binary
-  ([bin] (seq bin))
-  ([bin align-to] (with-meta (seq bin)
-                             (assoc (meta bin) ::alignment align-to))))
+   :int32 (with-meta (reify-primitive Integer .getInt .putInt int)
+                      {::spec (signed-primitive-spec Integer)})
 
-(defn alignment-padding [align-to position]
-  (let [bytes-over (mod position align-to)]
-    (if (pos? bytes-over)
-      (- align-to bytes-over)
-      0)))
+   :int64 (with-meta (reify-primitive Long .getLong .putLong long)
+                      {::spec (signed-primitive-spec Long)})
 
-(defn binary-concat 
-  "Concatenates a series of binary sequences, adding in alignment padding as needed
-  The resulting binary sequence will have an alignment equal to the greatest of all the passed
-  sequences"
-  [& bin-seqs]
-  (let [[_ coll-align coll] (reduce (fn [[position coll-alignment coll] bin]
-                                     (let [align-to (alignment bin)
-                                           padding (repeat (alignment-padding align-to position) (byte 0))]
-                                       [(+ (count coll) (count padding) (count bin))
-                                        (max coll-alignment align-to)
-                                        (concat coll padding bin)]))
-                                   [0 1 nil]
-                                   bin-seqs)]
-    (make-binary coll coll-align)))
+   :uint8 (with-meta (reify-primitive Byte .get .put unchecked-byte Byte/toUnsignedLong)
+                      {::spec (unsigned-primitive-spec Byte)})
 
+   :uint16 (with-meta (reify-primitive Short .getShort .putShort unchecked-short Short/toUnsignedLong)
+                       {::spec (unsigned-primitive-spec Short)})
 
-(extend-protocol Binary
-  clojure.lang.Keyword
-  ;; If collections are being flattened, then a keyword should be encoded as nil
-  ;; Otherwise just return the keyword
-  (encode* [this encoding]
-    (if (not (::flatten encoding))
-      this))
-  clojure.lang.Sequential
-  ;; A sequntial object may have some metadata that improves encoding
-  ;;
-  ;; First, there may be a data-xform.  A data x-form takes that sequential argument
-  ;; and transforms it into some new sequential data
-  ;;
-  ;; Second, there may be an encoding transform.  And encoding x-form takes a single encoding
-  ;; and create a sequence of encodings that can be directly mapped to the result of the data 
-  ;; x-form
-  ;;
-  ;; Third, there may be a force alignment vector, that forces the alignment of certain
-  ;; results
-  (encode* [this encoding]
-    (let [{:keys [::data-xform ::encoding-xform ::force-align] 
-           :or {data-xform identity encoding-xform repeat}}
-           (meta this)
-          encs (encoding-xform encoding)
-          data (data-xform this)
-          bin-seq (mapv encode* data encs)
-          aligned-seq (reduce (fn [bs [index align-to]]
-                                (update bs index update-alignment align-to))
-                              bin-seq
-                              force-align)]
-      (if (::flatten encoding)
-        (apply binary-concat aligned-seq)
-        aligned-seq)))
-  clojure.lang.IPersistentMap
-  ;; A peristent map works like a sequntial collection, but there needs to be
-  ;; a way to order the collection.  If the order is specified in the metadata,
-  ;; then it will use that.  Otherwise the order will be based off a call to keys
-  (encode* [this encoding]
-    (let [m (meta this)
-          struct-order (or (::struct-order m) (keys this))
-          data-seq (reduce (fn [coll k] (conj coll (get this k)))
-                           []
-                           struct-order)
-          bin-seq (encode* (with-meta data-seq m) encoding)]
-      (if (::flatten encoding)
-        bin-seq
-        (zipmap struct-order bin-seq)))))
+   :uint32 (with-meta (reify-primitive Integer .getInt .putInt unchecked-int Integer/toUnsignedLong)
+                       {::spec (unsigned-primitive-spec Integer)})
 
-(defn align [align-to index] 
-  (fn [metadata]
-    (update metadata ::force-align conj [index align-to])))
+   :float32 (with-meta (reify-primitive Float .getFloat .putFloat float)
+                        {::spec (signed-primitive-spec Float)})
 
-; (defn push [& encoding-key-val-pairs]
-;   (fn [enc-stack]))
-
-; (defn pop []
-;   (fn [enc-stack]))
-
-(defmacro array 
-  [enc-pred & {:keys [align encoding into kind count max-count min-count distinct gen-max gen]
-               :or {into []}}]
-  (let [meta-fn `(fn [coll#]
-                  (if ~align
-                    (assoc (meta coll#) 
-                           ::force-align (map-indexed vector (repeat (count coll#) ~align)))
-                   (meta coll#)))]
-  `(s/and (s/coll-of ~enc-pred 
-                     :into ~into
-                     :kind ~kind
-                     :count ~count
-                     :max-count ~max-count
-                     :min-count ~min-count
-                     :distinct ~distinct
-                     :gen-max ~gen-max
-                     :gen ~gen)
-          (s/conformer #(with-meta %
-                                   (~meta-fn %))))))
-
-(defn res-pragma [pred-encoders]
-  (let [[specs pragmas _] (reduce (fn [[specs pragmas index] pred]
-                                    (if (and (seq? pred)
-                                             (= (first pred) :pragma))
-                                      (let [pragma-form (concat (rest pred) [index])]
-                                        [specs (conj pragmas pragma-form) index])
-                                      [(conj specs pred) pragmas (inc index)]))
-                                  [[] [] 0]
-                                  pred-encoders)]
-    [specs pragmas]))
-
-(defmacro tuple [& pred-encoders]
-  (let [[specs pragmas] (res-pragma pred-encoders)
-        metadata `(reduce #(%2 %1) {} ~pragmas)]
-    `(s/and (s/tuple ~@specs)
-           (s/conformer #(with-meta % 
-                                    (merge (meta %) ~metadata))))))
+   :float64 (with-meta (reify-primitive Double .getDouble .putDouble double)
+                        {::spec (signed-primitive-spec Double)})
+   })
 
 
-(defmacro struct [& key-pred-encoders]
-  (let [[specs pragmas] (res-pragma key-pred-encoders)
-        metadata `(reduce #(%2 %1) {} ~pragmas)
-        unk #(-> % name keyword)
-        [req req-un order] (reduce (fn [[req req-un order] f]
-                                     (cond 
-                                       (keyword? f) [(conj req f) req-un (conj order f)]
-                                       (and (seq? f)
-                                            (= (first f) :unqualified)) [req (conj req-un (second f)) (conj order (unk (second f)))]
-                                       :else (throw (ex-info "Struct field is not qualified keyword or unqualified sequence"
-                                                             {:field f}))))
+; (edn-to-binary.core/def ::int8 (with-meta (reify-primitive Byte .get .put byte)
+;                                           {::spec (signed-primitive-spec Byte)}))
 
-                               
-                             [[] [] []]
-                             specs)
+; (edn-to-binary.core/def ::int16 (with-meta (reify-primitive Short .getShort .putShort short)
+;                                            {::spec (signed-primitive-spec Short)}))
+
+; (edn-to-binary.core/def ::int32 (with-meta (reify-primitive Integer .getInt .putInt int)
+;                                            {::spec (signed-primitive-spec Integer)}))
+
+; (edn-to-binary.core/def ::int64 (with-meta (reify-primitive Long .getLong .putLong long)
+;                                            {::spec (signed-primitive-spec Long)}))
+
+; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; (edn-to-binary.core/def ::uint8 (with-meta (reify-primitive Byte .get .put unchecked-byte Byte/toUnsignedLong)
+;                                            {::spec (unsigned-primitive-spec Byte)}))
+
+; (edn-to-binary.core/def ::uint16 (with-meta (reify-primitive Short .getShort .putShort unchecked-short Short/toUnsignedLong)
+;                                             {::spec (unsigned-primitive-spec Short)}))
+
+; (edn-to-binary.core/def ::uint32 (with-meta (reify-primitive Integer .getInt .putInt unchecked-int Integer/toUnsignedLong)
+;                                             {::spec (unsigned-primitive-spec Integer)}))
+
+; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; (edn-to-binary.core/def ::float32 (with-meta (reify-primitive Float .getFloat .putFloat float)
+;                                              {::spec (signed-primitive-spec Float)}))
+
+; (edn-to-binary.core/def ::float64 (with-meta (reify-primitive Double .getDouble .putDouble double)
+;                                              {::spec (signed-primitive-spec Double)}))
+
+; (defmacro reg-primitive [name prim-key & encoding-args]
+;   (let [new-key (fn [n] (keyword (str n) (clojure.core/name prim-key)))]
+;     `(edn-to-binary.core/def (~new-key ~name) (apply recode (~prim-key primitive-prototypes) ~encoding-args))))
+
+(defmacro register-primitives 
+  "Registers the primitive codecs with a given namespace and encoding. This allows developers
+  to create a group of primitives with their desired word-size and byte order.
+
+  A name must be a string. It cannot be an experssion or symbol such as (str *ns*)
+  This is an unfortunate effects of the way clojure.spec.alpha/def works. 
+
+  The primitives that are defined are as follows
+  :int8
+  :int16
+  :int32
+  :int64
+  :uint8
+  :uint16
+  :uint32
+  :float32
+  :float64
+
+  Calling this macro with a given name and encoding-args will result is a series of calls looking like
+  'edn-to-binary.core/def :name/int8 (apply recode :edn-to-binary.core/int8  encoding-args)'
+  'edn-to-binary.core/def :name/int16 (apply recode :edn-to-binary.core/int16  encoding-args)'
+  ...etc.
+  "
+  [name & encoding-args]
+  (let [ks (mapv #(keyword name (clojure.core/name %)) (keys primitive-prototypes))
+        def-forms (mapv (fn [k-form k-proto]
+                          ;; This form is a little hand wavy
+                          ;; The actual record can't be gotten in the macro because print-dub is not defined
+                          ;; so instead we will use the line '(~k-proto primitive-prototypes) to get the codec
+                          ;;
+                          ;; In a sense the isn't getting the actual codec, but it is the executable code that
+                          ;; can get the codec
+                          `(edn-to-binary.core/def ~k-form (apply recode (~k-proto primitive-prototypes) [~@encoding-args])))
+                        ks
+                        (keys primitive-prototypes))
+
         ]
-    `(s/and (s/keys :req [~@req] :req-un [~@req-un])
-            (s/conformer #(with-meta % 
-                                     (assoc (merge (meta %) ~metadata) 
-                                            ::struct-order ~order))))))
+    `(do ~@def-forms)))
+
+(defmacro register-primitives-with-ns
+  "Registers primitives in a passed namespace.  This lets you use register primitives in a 
+  namespace without having to hardcode the string name"
+  ([namespace] 
+   (let [n (str namespace)]
+     `(register-primitives ~n)))
+  ([namespace & encoding-args] 
+   (let [n (str namespace)]
+     `(register-primitives ~n ~encoding-args))))
+
+(defmacro register-primitives-in-ns
+  "The *ns* token is represented differently from other objects, and it was
+  throwing the register-primitives-with-ns off.  This function gets around it by uxing *ns*
+  explicitly
+
+  This macro will register the primitives in the namespace where it was called"
+  ([] 
+   (let [n (str *ns*)]
+     `(register-primitives ~n )))
+  ([& encoding-args] 
+   (let [n (str *ns*)]
+     `(register-primitives ~n ~encoding-args))))
+
+(register-primitives-in-ns)
