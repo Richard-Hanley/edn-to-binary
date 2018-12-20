@@ -1,5 +1,7 @@
 (ns edn-to-binary.core
   (:import java.nio.ByteBuffer)
+  (:import java.nio.charset.Charset)
+  (:import java.nio.charset.StandardCharsets)
   (:import java.nio.ByteOrder)
   (:require [clojure.spec.alpha :as s]
             [clojure.set :as set]))
@@ -70,6 +72,56 @@
      (s/def ~k ~final-spec))))
 
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;Specs for encoding codecs
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defn power-of-2? 
+  "A number is a power of two if there is only one bit set"
+  [num]
+  (= (Long/lowestOneBit num) (Long/highestOneBit num)))
+
+(s/def ::alignment power-of-2?)
+
+(s/def ::force-alignment (s/nilable ::alignment))
+(s/def ::word-size #{1 2 4 8})
+(s/def ::order #{:little :big :network :native})
+(s/def ::flatten boolean?)
+
+(s/def ::primitive-size ::word-size)
+;; Get charset is a function that when given a java.nio.ByteOrder object
+;; returns a charset.  This must be a function because some charsets are order specific
+;; (I'm looking at you utf-16)
+(s/def ::get-charset fn?)
+
+(s/def ::custom-charset (s/keys :req [::primitive-size ::get-charset]))
+(s/def ::charset (s/or :standard #{:iso-8859-1 :ascii :utf-8 :utf-16-bom :utf-16}
+                       :custom ::custom-charset))
+(s/def ::null-terminated-strings boolean?)
+
+(def standard-charsets {:ascii {::primitive-size 1 ::get-charset (constantly StandardCharsets/US_ASCII)}
+                        :iso-8859-1 {::primitive-size 1 ::get-charset (constantly StandardCharsets/ISO_8859_1)}
+                        :utf-8 {::primitive-size 1 ::get-charset (constantly StandardCharsets/UTF_8)}
+                        :utf-16-bom {::primitive-size 2 ::get-charset (constantly StandardCharsets/UTF_16)}
+                        :utf-16 {::primitive-size 2 ::get-charset (fn [order] (if (= order ByteOrder/LITTLE_ENDIAN)
+                                                                                StandardCharsets/UTF_16LE
+                                                                                StandardCharsets/UTF_16BE))}
+                                 })
+
+(def order-map {:little ByteOrder/LITTLE_ENDIAN
+                :big ByteOrder/BIG_ENDIAN
+                :native (ByteOrder/nativeOrder)
+                :network ByteOrder/BIG_ENDIAN})
+
+(s/def ::base-encoding (s/keys :req [::word-size ::order ::flatten ::charset ::null-terminated-strings]))
+
+(def default-encoding (s/conform ::base-encoding {::word-size 1 
+                                                  ::order :little
+                                                  ::flatten true
+                                                  ::charset :utf-8
+                                                  ::null-terminated-strings false}))
+
+
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Wrappers for Codec protocol that look in the registry
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -92,38 +144,14 @@
     (decode* codec bin)))
 
 (defn recode [codec-form & encoding-args] 
-  (let [codec (if (keyword? codec-form) 
+  (let [enc (s/conform (s/keys*) encoding-args)
+        codec (if (keyword? codec-form) 
                 (reg-resolve codec-form)
                 codec-form)]
-    (recode* codec (apply array-map encoding-args))))
+    (if (s/invalid? enc)
+      (throw (ex-info "Invalid encoding for recode" (s/explain-data (s/keys*) encoding-args)))
+      (recode* codec enc))))
 
-
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;Specs for encoding codecs
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(defn power-of-2? 
-  "A number is a power of two if there is only one bit set"
-  [num]
-  (= (Long/lowestOneBit num) (Long/highestOneBit num)))
-
-(s/def ::alignment power-of-2?)
-
-(s/def ::force-alignment (s/nilable ::alignment))
-(s/def ::word-size #{1 2 4 8})
-(s/def ::order #{:little :big :network :native})
-(s/def ::flatten boolean?)
-
-(def order-map {:little ByteOrder/LITTLE_ENDIAN
-                :big ByteOrder/BIG_ENDIAN
-                :native (ByteOrder/nativeOrder)
-                :network ByteOrder/BIG_ENDIAN})
-
-(s/def ::base-encoding (s/keys :req [::word-size ::order ::flatten]))
-
-(def default-encoding {::word-size 1 
-                       ::order :little
-                       ::flatten true})
 
 
 
@@ -140,6 +168,28 @@
       (seq (.array buff))))
   (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
   (recode* [this encoding] (update this :enc merge encoding)))
+
+(defn string-codec [current-enc]
+  (let [{:keys [::force-alignment ::word-size ::order ::charset ::null-terminated-strings]} current-enc
+        [charset-type charset-value] charset
+        charset-map (if (#{:standard} charset-type)
+                      (get standard-charsets charset-value)
+                      charset-value)
+        {:keys [::primitive-size ::get-charset]} charset-map
+        order-instance (get order-map order)
+        charset-instance (get-charset order-instance)]
+    (reify Codec
+      (alignment* [_] (or force-alignment
+                          (min word-size primitive-size)))
+      (encode* [_ data] 
+        (let [byte-string (seq (.getBytes data charset-instance))]
+          (if null-terminated-strings
+            (concat byte-string (seq (.getBytes (str \u0000) charset-instance)))
+            byte-string)))
+      (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+      (recode* [this enc] (with-meta (string-codec (merge current-enc enc))
+                                     (meta this))))))
+
 
 (defmacro reify-primitive 
   ([class get put coerce-to] `(reify-primitive ~class ~get ~put ~coerce-to identity))
@@ -185,41 +235,13 @@
 
    :float64 (with-meta (reify-primitive Double .getDouble .putDouble double)
                         {::spec (signed-primitive-spec Double)})
+
+   :utf-8 (with-meta (string-codec default-encoding)
+                     {::spec string?})
+
+   :utf-16 (with-meta (recode (string-codec default-encoding) ::charset :utf-16)
+                     {::spec string?})
    })
-
-
-; (edn-to-binary.core/def ::int8 (with-meta (reify-primitive Byte .get .put byte)
-;                                           {::spec (signed-primitive-spec Byte)}))
-
-; (edn-to-binary.core/def ::int16 (with-meta (reify-primitive Short .getShort .putShort short)
-;                                            {::spec (signed-primitive-spec Short)}))
-
-; (edn-to-binary.core/def ::int32 (with-meta (reify-primitive Integer .getInt .putInt int)
-;                                            {::spec (signed-primitive-spec Integer)}))
-
-; (edn-to-binary.core/def ::int64 (with-meta (reify-primitive Long .getLong .putLong long)
-;                                            {::spec (signed-primitive-spec Long)}))
-
-; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; (edn-to-binary.core/def ::uint8 (with-meta (reify-primitive Byte .get .put unchecked-byte Byte/toUnsignedLong)
-;                                            {::spec (unsigned-primitive-spec Byte)}))
-
-; (edn-to-binary.core/def ::uint16 (with-meta (reify-primitive Short .getShort .putShort unchecked-short Short/toUnsignedLong)
-;                                             {::spec (unsigned-primitive-spec Short)}))
-
-; (edn-to-binary.core/def ::uint32 (with-meta (reify-primitive Integer .getInt .putInt unchecked-int Integer/toUnsignedLong)
-;                                             {::spec (unsigned-primitive-spec Integer)}))
-
-; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; (edn-to-binary.core/def ::float32 (with-meta (reify-primitive Float .getFloat .putFloat float)
-;                                              {::spec (signed-primitive-spec Float)}))
-
-; (edn-to-binary.core/def ::float64 (with-meta (reify-primitive Double .getDouble .putDouble double)
-;                                              {::spec (signed-primitive-spec Double)}))
-
-; (defmacro reg-primitive [name prim-key & encoding-args]
-;   (let [new-key (fn [n] (keyword (str n) (clojure.core/name prim-key)))]
-;     `(edn-to-binary.core/def (~new-key ~name) (apply recode (~prim-key primitive-prototypes) ~encoding-args))))
 
 (defmacro register-primitives 
   "Registers the primitive codecs with a given namespace and encoding. This allows developers
