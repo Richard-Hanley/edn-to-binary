@@ -182,7 +182,7 @@
       (alignment* [_] (or force-alignment
                           (min word-size primitive-size)))
       (encode* [_ data] 
-        (let [byte-string (seq (.getBytes data charset-instance))]
+        (let [byte-string (seq (.getBytes (or data  "") charset-instance))]
           (if null-terminated-strings
             (concat byte-string (seq (.getBytes (str \u0000) charset-instance)))
             byte-string)))
