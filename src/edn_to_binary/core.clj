@@ -85,7 +85,6 @@
 (s/def ::force-alignment (s/nilable ::alignment))
 (s/def ::word-size #{1 2 4 8})
 (s/def ::order #{:little :big :network :native})
-(s/def ::flatten boolean?)
 
 (s/def ::primitive-size ::word-size)
 ;; Get charset is a function that when given a java.nio.ByteOrder object
@@ -112,11 +111,10 @@
                 :native (ByteOrder/nativeOrder)
                 :network ByteOrder/BIG_ENDIAN})
 
-(s/def ::base-encoding (s/keys :req [::word-size ::order ::flatten ::charset ::null-terminated-strings]))
+(s/def ::base-encoding (s/keys :req [::word-size ::order ::charset ::null-terminated-strings]))
 
 (def default-encoding (s/conform ::base-encoding {::word-size 1 
                                                   ::order :little
-                                                  ::flatten true
                                                   ::charset :utf-8
                                                   ::null-terminated-strings false}))
 
@@ -131,11 +129,12 @@
                 codec-form)]
     (alignment* codec)))
 
-(defn encode [codec-form data] 
-  (let [codec (if (keyword? codec-form) 
-                (reg-resolve codec-form)
-                codec-form)]
-    (encode* codec data)))
+(defn encode 
+  [codec-form data] 
+   (let [codec (if (keyword? codec-form) 
+                 (reg-resolve codec-form)
+                 codec-form)]
+     (encode* codec data)))
 
 (defn decode [codec-form bin] 
   (let [codec (if (keyword? codec-form) 
@@ -165,7 +164,8 @@
     (let [buff (.order (ByteBuffer/allocate size)
                        (get order-map (::order enc)))
           _ (put-buffer buff (or data 0))]
-      (seq (.array buff))))
+      (with-meta (seq (.array buff))
+                 {::alignment (alignment* this)})))
   (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
   (recode* [this encoding] (update this :enc merge encoding)))
 
@@ -179,13 +179,15 @@
         order-instance (get order-map order)
         charset-instance (get-charset order-instance)]
     (reify Codec
-      (alignment* [_] (or force-alignment
+      (alignment* [this] (or force-alignment
                           (min word-size primitive-size)))
-      (encode* [_ data] 
-        (let [byte-string (seq (.getBytes (or data  "") charset-instance))]
-          (if null-terminated-strings
-            (concat byte-string (seq (.getBytes (str \u0000) charset-instance)))
-            byte-string)))
+      (encode* [this data] 
+        (let [byte-string (seq (.getBytes (or data  "") charset-instance))
+              result (if null-terminated-strings
+                       (concat byte-string (seq (.getBytes (str \u0000) charset-instance)))
+                       byte-string)]
+          (with-meta result
+                     {::alignment (alignment* this)})))
       (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
       (recode* [this enc] (with-meta (string-codec (merge current-enc enc))
                                      (meta this))))))
@@ -306,3 +308,53 @@
      `(register-primitives ~n ~encoding-args))))
 
 (register-primitives-in-ns)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Composite definitions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defn array-impl 
+  ([codec]
+   (reify Codec
+     (alignment* [_] (alignment codec))
+     (encode* [this data] (with-meta (mapv (partial encode codec) data)
+                                    {::alignment (alignment* this)}))
+     (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+     (recode* [_ encoding] (array-impl (apply recode codec (flatten (seq encoding)))))))
+  ([codec align-to]
+   (reify Codec
+     (alignment* [_] (alignment codec))
+     (encode* [this data] (with-meta (mapv (partial encode codec) data)
+                                    {::alignment (alignment* this)}))
+     (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+     (recode* [_ encoding] (array-impl (apply recode codec (flatten (seq encoding))))))))
+
+
+(defmacro array 
+  "Create an array codec and spec.
+  The array macro takes the same arguments as s/coll-of and s/every, with 2 differences
+
+  First, there is no support for an :into argument.  All results from the array spec
+  will be conformed into a vector
+
+  Second, there is an optional :align field.  The align field will be applied to every
+  element in the array"
+  [codec & {:keys [align kind count max-count min-count distinct gen-max gen]}]
+  (let [c `(if ~align
+             (array-impl ~codec ~align)
+             (array-impl ~codec))]
+    `(with-meta ~c
+                {::spec (s/coll-of ~(get-codec-spec codec) 
+                                   :into []
+                                   :kind ~kind
+                                   :count ~count
+                                   :max-count ~max-count
+                                   :min-count ~min-count
+                                   :distinct ~distinct
+                                   :gen-max ~gen-max
+                                   :gen ~gen)})))
+
+
+
+
+(defn tuple-code [])
+(defn sturct-codec [])
