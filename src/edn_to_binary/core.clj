@@ -321,12 +321,15 @@
      (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
      (recode* [_ encoding] (array-impl (apply recode codec (flatten (seq encoding)))))))
   ([codec align-to]
-   (reify Codec
-     (alignment* [_] (alignment codec))
-     (encode* [this data] (with-meta (mapv (partial encode codec) data)
-                                    {::alignment (alignment* this)}))
-     (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
-     (recode* [_ encoding] (array-impl (apply recode codec (flatten (seq encoding))))))))
+   (let [element-alignment (max align-to (alignment codec))]
+     (reify Codec
+       (alignment* [_] element-alignment)
+       (encode* [this data] (with-meta (mapv #(with-meta (encode codec %)
+                                                         {::alignment element-alignment})
+                                             data)
+                                       {::alignment element-alignment}))
+       (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+       (recode* [_ encoding] (array-impl (apply recode codec (flatten (seq encoding)))))))))
 
 
 (defmacro array 
@@ -339,10 +342,10 @@
   Second, there is an optional :align field.  The align field will be applied to every
   element in the array"
   [codec & {:keys [align kind count max-count min-count distinct gen-max gen]}]
-  (let [c `(if ~align
-             (array-impl ~codec ~align)
-             (array-impl ~codec))]
-    `(with-meta ~c
+  (let [codec-imp  `(if ~align
+                     (array-impl ~codec ~align)
+                     (array-impl ~codec))]
+    `(with-meta ~codec-imp 
                 {::spec (s/coll-of ~(get-codec-spec codec) 
                                    :into []
                                    :kind ~kind
