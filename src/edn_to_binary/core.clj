@@ -31,10 +31,10 @@
 ;    (with-meta bin
 ;               (assoc (meta bin) ::alignment align-to ::key-order key-order))))
 
-(defn- binary-seq-alignment [bin]
+(defn binary-seq-alignment [bin]
   (or (::alignment (meta bin)) 1))
 
-(defn- binary-order [coll]
+(defn binary-order [coll]
   (or (::key-order (meta coll)) (keys coll)))
 
 (defn alignment-padding [align-to position]
@@ -371,6 +371,18 @@
 
 (register-primitives-in-ns)
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Codec wrapper functions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn align [codec align-to]
+  (reify Codec
+    (alignment* [_] (max align-to (alignment codec)))
+    (encode* [this data] (make-binary (encode codec data)
+                                      :align (alignment* this)))
+    (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+    (recode* [this encoding] (align align-to (apply recode codec (clojure.core/flatten (seq encoding)))))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Composite definitions
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -418,8 +430,17 @@
                                    :gen-max ~gen-max
                                    :gen ~gen)})))
 
+(defn tuple-impl [codecs]
+  (reify Codec
+    (alignment* [_] (apply max (map alignment codecs)))
+    (encode* [_ data] (map encode codecs data))
+    (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+    (recode* [_ encoding] (tuple-impl 
+                            (map #(apply recode % (clojure.core/flatten (seq encoding))) 
+                                 codecs)))))
 
+(defmacro tuple [& codecs]
+  `(with-meta (tuple-impl [~@codecs])
+              {::spec (s/tuple ~@(map (fn [c] (get-codec-spec c)) codecs))}))
 
-
-(defn tuple-code [])
 (defn sturct-codec [])
