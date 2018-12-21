@@ -12,6 +12,69 @@
   (decode* [this bin])
   (recode* [this encoding]))
 
+(defprotocol BinaryCollection
+  (flatten [this]))
+
+(defn make-binary [bin & {:keys [order align]}]
+  (with-meta bin
+             (assoc (meta bin) ::alignment align ::key-order order)))
+
+; (defn make-binary 
+;   ([bin] bin)
+;   ([bin align-to] (with-meta bin
+;                              (assoc (meta bin) ::alignment align-to))))
+
+; (defn make-ordered-binary
+;   ([bin] (make-ordered-binary bin nil nil))
+;   ([bin key-order] (make-ordered-binary bin nil))
+;   ([bin key-order align-to]
+;    (with-meta bin
+;               (assoc (meta bin) ::alignment align-to ::key-order key-order))))
+
+(defn- binary-seq-alignment [bin]
+  (or (::alignment (meta bin)) 1))
+
+(defn- binary-order [coll]
+  (or (::key-order (meta coll)) (keys coll)))
+
+(defn alignment-padding [align-to position]
+  (let [bytes-over (mod position align-to)]
+    (if (pos? bytes-over)
+      (- align-to bytes-over)
+      0)))
+
+(extend-protocol BinaryCollection
+  nil
+  (flatten [this] nil)
+
+  clojure.lang.Keyword
+  (flatten [this] nil)
+
+  Byte
+  (flatten [this] (list this))
+
+  clojure.lang.Sequential
+  (flatten [this]
+    (let [coll-alignment (binary-seq-alignment this)
+          [bin elem-alignment] (reduce (fn [[accum max-alignment] elem]
+                                         (let [elem-alignment (binary-seq-alignment elem)
+                                               padding (repeat (alignment-padding elem-alignment
+                                                                                  (count accum))
+                                                               (byte 0))]
+                                           [(concat accum padding elem)
+                                            (max elem-alignment max-alignment)]))
+                                       [[] 1]
+                                       (map flatten this))]
+          (make-binary bin :align (max coll-alignment elem-alignment))))
+  clojure.lang.IPersistentMap
+  (flatten [this]
+    (let [coll-alignment (binary-seq-alignment this)
+          ordered-vals (map #(get this %) (binary-order this))
+          bin (flatten ordered-vals)]
+      (make-binary bin :align (max coll-alignment (binary-seq-alignment bin))))))
+
+(defn sizeof [bin]
+  (count (flatten bin)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Managing the codec registry and the spec metadata
@@ -164,8 +227,8 @@
     (let [buff (.order (ByteBuffer/allocate size)
                        (get order-map (::order enc)))
           _ (put-buffer buff (or data 0))]
-      (with-meta (seq (.array buff))
-                 {::alignment (alignment* this)})))
+      (make-binary (seq (.array buff))
+                   :align (alignment* this))))
   (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
   (recode* [this encoding] (update this :enc merge encoding)))
 
@@ -186,8 +249,7 @@
               result (if null-terminated-strings
                        (concat byte-string (seq (.getBytes (str \u0000) charset-instance)))
                        byte-string)]
-          (with-meta result
-                     {::alignment (alignment* this)})))
+          (make-binary result :align (alignment* this))))
       (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
       (recode* [this enc] (with-meta (string-codec (merge current-enc enc))
                                      (meta this))))))
@@ -316,20 +378,20 @@
   ([codec]
    (reify Codec
      (alignment* [_] (alignment codec))
-     (encode* [this data] (with-meta (mapv (partial encode codec) data)
-                                    {::alignment (alignment* this)}))
+     (encode* [this data] (make-binary (mapv (partial encode codec) data)
+                                       :align (alignment* this)))
      (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
-     (recode* [_ encoding] (array-impl (apply recode codec (flatten (seq encoding)))))))
+     (recode* [_ encoding] (array-impl (apply recode codec (clojure.core/flatten (seq encoding)))))))
   ([codec align-to]
    (let [element-alignment (max align-to (alignment codec))]
      (reify Codec
        (alignment* [_] element-alignment)
-       (encode* [this data] (with-meta (mapv #(with-meta (encode codec %)
-                                                         {::alignment element-alignment})
-                                             data)
-                                       {::alignment element-alignment}))
+       (encode* [this data] (make-binary (mapv #(make-binary (encode codec %)
+                                                             :align element-alignment)
+                                               data)
+                                       :align element-alignment))
        (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
-       (recode* [_ encoding] (array-impl (apply recode codec (flatten (seq encoding)))))))))
+       (recode* [_ encoding] (array-impl (apply recode codec (clojure.core/flatten (seq encoding)))))))))
 
 
 (defmacro array 
