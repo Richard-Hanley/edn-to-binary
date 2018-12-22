@@ -201,9 +201,6 @@
       (throw (ex-info "Invalid encoding for recode" (s/explain-data (s/keys*) encoding-args)))
       (recode* codec enc))))
 
-
-
-
 (defrecord PrimitiveCodec [size get-buffer put-buffer enc]
   Codec
   (alignment* [this]
@@ -444,4 +441,18 @@
   `(with-meta (s/tuple ~@specified-codecs)
               {::codec (tuple-impl (mapv extract-codec [~@specified-codecs]))}))
 
-(defn sturct-codec [])
+(defmacro struct [& registered-codecs]
+  (let [unk #(-> % name keyword)
+        [req req-un order] (reduce (fn [[req req-un order] f]
+                                     (cond 
+                                       (keyword? f) [(conj req f) req-un (conj order f)]
+                                       (and (seq? f)
+                                            (= (first f) :unqualified)) [req (conj req-un (second f)) (conj order (unk (second f)))]
+                                       :else (throw (ex-info "Struct field is not qualified keyword or unqualified sequence"
+                                                             {:field f}))))
+
+
+                                   [[] [] []]
+                                   registered-codecs)]
+    `(with-meta (s/keys :req [~@req] :req-un [~@req-un])
+                {::codec ~order})))
