@@ -455,9 +455,9 @@
                                         :key-order key-order))
       (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
       (recode* [_ encoding] 
-        (let [recoded-codecs (map #(apply recode % (clojure.core/flatten (seq encoding))) 
+        (let [ recoded-codecs (map #(apply recode % (clojure.core/flatten (seq encoding))) 
                                   codecs)
-              args (map vector key-rder recorded-codecs)]
+              args (map vector key-order recoded-codecs)]
           (struct-impl args))))))
 
 
