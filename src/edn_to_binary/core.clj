@@ -431,7 +431,8 @@
 (defn tuple-impl [codecs]
   (reify Codec
     (alignment* [_] (apply max (map alignment codecs)))
-    (encode* [_ data] (map encode codecs data))
+    (encode* [this data] (make-binary (map encode codecs data)
+                                   :align (alignment this)))
     (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
     (recode* [_ encoding] (tuple-impl 
                             (map #(apply recode % (clojure.core/flatten (seq encoding))) 
@@ -441,13 +442,34 @@
   `(with-meta (s/tuple ~@specified-codecs)
               {::codec (tuple-impl (mapv extract-codec [~@specified-codecs]))}))
 
+(defn struct-impl [key-codec-pairs]
+  (let [key-order (map first key-codec-pairs)
+        codecs (map second key-codec-pairs)
+        ordered-values (fn [coll]
+                        (map #(get coll %) key-order))]
+    (reify Codec
+      (alignment* [this] (apply max (map alignment codecs)))
+      (encode* [this data] (make-binary (zipmap key-order
+                                                (map encode codecs (ordered-values data)))
+                                        :align (alignment* this)
+                                        :key-order key-order))
+      (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+      (recode* [_ encoding] 
+        (let [recoded-codecs (map #(apply recode % (clojure.core/flatten (seq encoding))) 
+                                  codecs)
+              args (map vector key-rder recorded-codecs)]
+          (struct-impl args))))))
+
+
 (defmacro struct [& registered-codecs]
   (let [unk #(-> % name keyword)
+        qualified-order (fn [k] [k k])
+        unqualified-order (fn [k] [(unk k) k])
         [req req-un order] (reduce (fn [[req req-un order] f]
                                      (cond 
-                                       (keyword? f) [(conj req f) req-un (conj order f)]
+                                       (keyword? f) [(conj req f) req-un (conj order (qualified-order f))]
                                        (and (seq? f)
-                                            (= (first f) :unqualified)) [req (conj req-un (second f)) (conj order (unk (second f)))]
+                                            (= (first f) :unqualified)) [req (conj req-un (second f)) (conj order (unqualified-order (second f)))]
                                        :else (throw (ex-info "Struct field is not qualified keyword or unqualified sequence"
                                                              {:field f}))))
 
@@ -455,4 +477,4 @@
                                    [[] [] []]
                                    registered-codecs)]
     `(with-meta (s/keys :req [~@req] :req-un [~@req-un])
-                {::codec ~order})))
+                {::codec (struct-impl [~@order])})))
