@@ -19,18 +19,6 @@
   (with-meta bin
              (assoc (meta bin) ::alignment align ::key-order order)))
 
-; (defn make-binary 
-;   ([bin] bin)
-;   ([bin align-to] (with-meta bin
-;                              (assoc (meta bin) ::alignment align-to))))
-
-; (defn make-ordered-binary
-;   ([bin] (make-ordered-binary bin nil nil))
-;   ([bin key-order] (make-ordered-binary bin nil))
-;   ([bin key-order align-to]
-;    (with-meta bin
-;               (assoc (meta bin) ::alignment align-to ::key-order key-order))))
-
 (defn binary-seq-alignment [bin]
   (or (::alignment (meta bin)) 1))
 
@@ -79,11 +67,11 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Managing the codec registry and the spec metadata
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(defmacro get-codec-spec [codec]
-  `(if (keyword? ~codec)
-    ~codec
-    (or (::spec (meta ~codec))
-        (throw (ex-info "No spec defined for given codec" {:codec ~codec})))))
+(defn extract-codec [spec]
+  (if (keyword? spec)
+    spec
+    (or (::codec (meta spec))
+        (throw (ex-info "No codec defined for the given spec" {:spec spec :meta (meta spec)})))))
 
 (defonce ^:private registry-ref (atom {}))
 
@@ -123,15 +111,14 @@
   Additional agruments are supported.  Using a :spec or :post-spec argument will add in
   extra specs that might not be part of the passed codec.  The resulting spec will be 
   of the form `(s/and spec codec post-spec) "
-  [k codec & {:keys [spec post-spec]}]
-    (let [base-spec `(get-codec-spec ~codec)
-          final-spec (cond
-                       (and (some? spec) (some? post-spec)) `(s/and ~spec ~base-spec ~post-spec)
-                       (some? spec) `(s/and ~spec ~base-spec)
-                       (some? post-spec) `(s/and ~base-spec ~post-spec)
-                       :else `~base-spec)]
+  [k specified-codec & {:keys [spec post-spec]}]
+    (let [final-spec (cond
+                       (and (some? spec) (some? post-spec)) `(s/and ~spec ~specified-codec ~post-spec)
+                       (some? spec) `(s/and ~spec ~specified-codec)
+                       (some? post-spec) `(s/and ~specified-codec ~post-spec)
+                       :else `~specified-codec)]
   `(do 
-     (register-codec ~k ~codec)
+     (register-codec ~k (extract-codec ~specified-codec))
      (s/def ~k ~final-spec))))
 
 
@@ -273,38 +260,49 @@
 ;; Defining the primitive specs
 
 (def primitive-prototypes 
-  {:int8 (with-meta (reify-primitive Byte .get .put byte)
-                     {::spec (signed-primitive-spec Byte)})
+  {:int8 (with-meta (signed-primitive-spec Byte)
+                    {::codec (reify-primitive Byte .get .put byte)})
 
-   :int16 (with-meta (reify-primitive Short .getShort .putShort short)
-                      {::spec (signed-primitive-spec Short)})
 
-   :int32 (with-meta (reify-primitive Integer .getInt .putInt int)
-                      {::spec (signed-primitive-spec Integer)})
+   :int16 (with-meta (signed-primitive-spec Short)
+                     {::codec (reify-primitive Short .getShort .putShort short)})
 
-   :int64 (with-meta (reify-primitive Long .getLong .putLong long)
-                      {::spec (signed-primitive-spec Long)})
 
-   :uint8 (with-meta (reify-primitive Byte .get .put unchecked-byte Byte/toUnsignedLong)
-                      {::spec (unsigned-primitive-spec Byte)})
+   :int32 (with-meta (signed-primitive-spec Integer)
+                     {::codec (reify-primitive Integer .getInt .putInt int)})
 
-   :uint16 (with-meta (reify-primitive Short .getShort .putShort unchecked-short Short/toUnsignedLong)
-                       {::spec (unsigned-primitive-spec Short)})
 
-   :uint32 (with-meta (reify-primitive Integer .getInt .putInt unchecked-int Integer/toUnsignedLong)
-                       {::spec (unsigned-primitive-spec Integer)})
+   :int64 (with-meta (signed-primitive-spec Long)
+                     {::codec (reify-primitive Long .getLong .putLong long)})
 
-   :float32 (with-meta (reify-primitive Float .getFloat .putFloat float)
-                        {::spec (signed-primitive-spec Float)})
 
-   :float64 (with-meta (reify-primitive Double .getDouble .putDouble double)
-                        {::spec (signed-primitive-spec Double)})
+   :uint8 (with-meta (unsigned-primitive-spec Byte)
+                     {::codec (reify-primitive Byte .get .put unchecked-byte Byte/toUnsignedLong)})
 
-   :utf-8 (with-meta (string-codec default-encoding)
-                     {::spec string?})
 
-   :utf-16 (with-meta (recode (string-codec default-encoding) ::charset :utf-16)
-                     {::spec string?})
+   :uint16 (with-meta (unsigned-primitive-spec Short)
+                      {::codec (reify-primitive Short .getShort .putShort unchecked-short Short/toUnsignedLong)})
+
+
+   :uint32 (with-meta (unsigned-primitive-spec Integer)
+                      {::codec (reify-primitive Integer .getInt .putInt unchecked-int Integer/toUnsignedLong)})
+
+
+   :float32 (with-meta  (signed-primitive-spec Float)
+                       {::codec (reify-primitive Float .getFloat .putFloat float)})
+
+
+   :float64 (with-meta (signed-primitive-spec Double)
+                       {::codec (reify-primitive Double .getDouble .putDouble double)})
+
+
+   :utf-8 (with-meta string?
+                     {::codec (string-codec default-encoding)})
+
+
+   :utf-16 (with-meta string?
+                      {::codec (recode (string-codec default-encoding) ::charset :utf-16)})
+
    })
 
 (defmacro register-primitives 
@@ -339,7 +337,10 @@
                           ;;
                           ;; In a sense the isn't getting the actual codec, but it is the executable code that
                           ;; can get the codec
-                          `(edn-to-binary.core/def ~k-form (apply recode (~k-proto primitive-prototypes) [~@encoding-args])))
+                          `(edn-to-binary.core/def 
+                             ~k-form 
+                             (with-meta (~k-proto primitive-prototypes)
+                                        {::codec (apply recode (extract-codec (~k-proto primitive-prototypes)) [~@encoding-args])})))
                         ks
                         (keys primitive-prototypes))
 
@@ -415,20 +416,20 @@
 
   Second, there is an optional :align field.  The align field will be applied to every
   element in the array"
-  [codec & {:keys [align kind count max-count min-count distinct gen-max gen]}]
+  [specified-codec & {:keys [align kind count max-count min-count distinct gen-max gen]}]
   (let [codec-imp  `(if ~align
-                     (array-impl ~codec ~align)
-                     (array-impl ~codec))]
-    `(with-meta ~codec-imp 
-                {::spec (s/coll-of ~(get-codec-spec codec) 
-                                   :into []
-                                   :kind ~kind
-                                   :count ~count
-                                   :max-count ~max-count
-                                   :min-count ~min-count
-                                   :distinct ~distinct
-                                   :gen-max ~gen-max
-                                   :gen ~gen)})))
+                     (array-impl (extract-codec ~specified-codec) ~align)
+                     (array-impl (extract-codec ~specified-codec)))]
+    `(with-meta (s/coll-of ~specified-codec
+                           :into []
+                           :kind ~kind
+                           :count ~count
+                           :max-count ~max-count
+                           :min-count ~min-count
+                           :distinct ~distinct
+                           :gen-max ~gen-max
+                           :gen ~gen)
+                {::codec ~codec-imp})))
 
 (defn tuple-impl [codecs]
   (reify Codec
@@ -439,8 +440,8 @@
                             (map #(apply recode % (clojure.core/flatten (seq encoding))) 
                                  codecs)))))
 
-(defmacro tuple [& codecs]
-  `(with-meta (tuple-impl [~@codecs])
-              {::spec (s/tuple ~@(map (fn [c] (get-codec-spec c)) codecs))}))
+(defmacro tuple [& specified-codecs]
+  `(with-meta (s/tuple ~@specified-codecs)
+              {::codec (tuple-impl (mapv extract-codec [~@specified-codecs]))}))
 
 (defn sturct-codec [])
