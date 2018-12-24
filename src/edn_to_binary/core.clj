@@ -381,15 +381,44 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Codec wrapper functions
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn align [codec align-to]
+(defmacro and 
+  "and acts as a wrapper for clojure.spec.alpha/and.  This will take a list of
+  specs, find the spec with a codecm, and return a call to s/and with the codec
+  annotated in the metadata"
+  [& codec-forms]
+  (let [specified-codec `(some (fn [form#] (or (and (get-codec form#) form#)
+                                              (-> form# (meta) ::codec)))
+                              [~@codec-forms])]
+    `(with-meta (s/and ~@codec-forms)
+                {::codec ~specified-codec})))
+
+
+(defmacro nilable 
+  "Wrapper for clojure.spec.alpha/nilable.  Allows for nil to be conformed.
+  Most codecs will be ale to handle nil inputs"
+  [codec]
+  `(with-meta (s/nilable ~codec)
+              {::codec (extract-codec ~codec)}))
+
+
+(defn align-impl [codec align-to]
   (reify Codec
     (alignment* [_] (max align-to (alignment codec)))
     (encode* [this data] (make-binary (encode codec data)
                                       :align (alignment* this)))
     (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
     (recode* [this encoding] (align align-to (apply recode codec (clojure.core/flatten (seq encoding)))))))
+
+(defmacro align [codec align-to]
+  (let [align-spec (if (keyword? codec)
+                     `(s/spec ~codec)
+                     `codec)]
+    `(with-meta ~align-spec
+                {::codec (align-impl (extract-codec ~codec) ~align-to)})))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Composite definitions
@@ -529,26 +558,6 @@
   `(with-meta (s/or ~@key-codec-forms)
               {::codec (union-impl (zipmap ~codec-keys 
                                            (mapv extract-codec [~@codec-forms])))})))
-
-(defmacro and 
-  "and acts as a wrapper for clojure.spec.alpha/and.  This will take a list of
-  specs, find the spec with a codecm, and return a call to s/and with the codec
-  annotated in the metadata"
-  [& codec-forms]
-  (let [specified-codec `(some (fn [form#] (or (and (get-codec form#) form#)
-                                              (-> form# (meta) ::codec)))
-                              [~@codec-forms])]
-    `(with-meta (s/and ~@codec-forms)
-                {::codec ~specified-codec})))
-
-
-(defmacro nilable 
-  "Wrapper for clojure.spec.alpha/nilable.  Allows for nil to be conformed.
-  Most codecs will be ale to handle nil inputs"
-  [codec]
-  `(with-meta (s/nilable ~codec)
-              {::codec (extract-codec ~codec)}))
-
   
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Common specs that can be used in codec definitions
