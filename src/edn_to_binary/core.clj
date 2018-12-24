@@ -301,7 +301,7 @@
 
 
    :utf-16 (with-meta string?
-                      {::codec (recode (string-codec default-encoding) ::charset :utf-16)})
+                      {::codec (recode* (string-codec default-encoding) (s/conform (s/keys) {::charset :utf-16}))})
 
    })
 
@@ -340,7 +340,8 @@
                           `(edn-to-binary.core/def 
                              ~k-form 
                              (with-meta (~k-proto primitive-prototypes)
-                                        {::codec (apply recode (extract-codec (~k-proto primitive-prototypes)) [~@encoding-args])})))
+                                        {::codec (recode* (extract-codec (~k-proto primitive-prototypes)) 
+                                                          (s/conform (s/keys*) [~@encoding-args]))})))
                         ks
                         (keys primitive-prototypes))
 
@@ -355,7 +356,7 @@
      `(register-primitives ~n)))
   ([namespace & encoding-args] 
    (let [n (str namespace)]
-     `(register-primitives ~n ~encoding-args))))
+     `(register-primitives ~n ~@encoding-args))))
 
 (defmacro register-primitives-in-ns
   "The *ns* token is represented differently from other objects, and it was
@@ -368,7 +369,7 @@
      `(register-primitives ~n )))
   ([& encoding-args] 
    (let [n (str *ns*)]
-     `(register-primitives ~n ~encoding-args))))
+     `(register-primitives ~n ~@encoding-args))))
 
 (register-primitives-in-ns)
 
