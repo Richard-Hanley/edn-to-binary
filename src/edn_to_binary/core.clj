@@ -15,14 +15,29 @@
 (defprotocol BinaryCollection
   (flatten [this]))
 
-(defn make-binary [bin & {:keys [order align]}]
+(defn make-binary 
+  "Makes an annotated binary collection
+
+  A binary collection is a recursive collection of bytes.  These
+  collections may be sequential or associative
+
+  Binary collections can have metadata that sets the alignment, or in the
+  case of maps a key order"
+  [bin & {:keys [order align]}]
   (with-meta bin
              (assoc (meta bin) ::alignment align ::key-order order)))
 
-(defn binary-seq-alignment [bin]
+(defn binary-coll-alignment 
+  "Gets the alignment of a binary collection.  If none is specified, it will
+  return 1"
+  [bin]
   (or (::alignment (meta bin)) 1))
 
-(defn binary-order [coll]
+(defn binary-order 
+  "This will get the key order for associative binary collections
+  If no key order is specified, then key order will be gotten from a 
+  call to keys"
+  [coll]
   (or (::key-order (meta coll)) (keys coll)))
 
 (defn alignment-padding [align-to position]
@@ -43,9 +58,9 @@
 
   clojure.lang.Sequential
   (flatten [this]
-    (let [coll-alignment (binary-seq-alignment this)
+    (let [coll-alignment (binary-coll-alignment this)
           [bin elem-alignment] (reduce (fn [[accum max-alignment] elem]
-                                         (let [elem-alignment (binary-seq-alignment elem)
+                                         (let [elem-alignment (binary-coll-alignment elem)
                                                padding (repeat (alignment-padding elem-alignment
                                                                                   (count accum))
                                                                (byte 0))]
@@ -56,10 +71,10 @@
           (make-binary bin :align (max coll-alignment elem-alignment))))
   clojure.lang.IPersistentMap
   (flatten [this]
-    (let [coll-alignment (binary-seq-alignment this)
+    (let [coll-alignment (binary-coll-alignment this)
           ordered-vals (map #(get this %) (binary-order this))
           bin (flatten ordered-vals)]
-      (make-binary bin :align (max coll-alignment (binary-seq-alignment bin))))))
+      (make-binary bin :align (max coll-alignment (binary-coll-alignment bin))))))
 
 (defn sizeof [bin]
   (count (flatten bin)))
@@ -67,7 +82,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Managing the codec registry and the spec metadata
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(defn extract-codec [spec]
+(defn extract-codec 
+  "Given a spec object, this will extract the annotated codec.  The spec must have 
+  a codec embedded in the metadata.  This function will not work on keywords"
+  [spec]
   (if (keyword? spec)
     spec
     (or (::codec (meta spec))
@@ -106,23 +124,11 @@
 
 (defmacro def 
   "Given a namespace qualified keyword k, this will register the codec and assocaited
-  spec to k.  The spec is assumed to be part of the metadata of the passed codec
-
-  Additional agruments are supported.  Using a :spec or :post-spec argument will add in
-  extra specs that might not be part of the passed codec.  The resulting spec will be 
-  of the form `(s/and spec codec post-spec) "
-  [k specified-codec & {:keys [nilable spec post-spec]}]
-    (let [spec (cond
-                 (and (some? spec) (some? post-spec)) `(s/and ~spec ~specified-codec ~post-spec)
-                 (some? spec) `(s/and ~spec ~specified-codec)
-                 (some? post-spec) `(s/and ~specified-codec ~post-spec)
-                 :else `~specified-codec)
-          final-spec (if nilable
-                       `(s/nilable ~spec)
-                       `~spec)]
+  spec to k.  The spec is assumed to be part of the metadata of the passed codec"
+  [k specified-codec]
   `(do 
      (register-codec ~k (extract-codec ~specified-codec))
-     (s/def ~k ~final-spec))))
+     (s/def ~k ~specified-codec)))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -442,7 +448,9 @@
                             (map #(apply recode % (clojure.core/flatten (seq encoding))) 
                                  codecs)))))
 
-(defmacro tuple [& specified-codecs]
+(defmacro tuple 
+  "Takes one or more specified codecs and returns a tuple spec/codec."
+  [& specified-codecs]
   `(with-meta (s/tuple ~@specified-codecs)
               {::codec (tuple-impl (mapv extract-codec [~@specified-codecs]))}))
 
@@ -465,7 +473,28 @@
           (struct-impl args))))))
 
 
-(defmacro struct [& registered-codecs]
+(defmacro struct 
+  "Takes a list of registered spec/codecs and creates a map spec/codec.
+
+  Spec requires that all maps are conformed with fully qualified keywords. That is why calls
+  to spec take the form '(s/keys :req [...] :req-un [...])
+
+  This is a bit of a problem for codecs, since order is very importatnt to a struct.
+  So a struct takes a list of arguments.  Args can either be keywords or sequences.
+
+  The following call:
+  (e/struct ::foo
+            ::bar
+            ::baz)
+  would conform a map of {::foo ... ::bar ... ::baz ...} and encode in that order
+
+  However, the following call:
+  (e/struct ::foo
+            (:unqualified ::bar)
+            (:unqualified ::baz))
+  would conform a map of {::foo ... :bar ... :baz ...} The order is maintianed, but :bar
+  and :baz no longer need their namespace"
+  [& registered-codecs]
   (let [unk #(-> % name keyword)
         qualified-order (fn [k] [k k])
         unqualified-order (fn [k] [(unk k) k])
@@ -501,6 +530,26 @@
               {::codec (union-impl (zipmap ~codec-keys 
                                            (mapv extract-codec [~@codec-forms])))})))
 
+(defmacro and 
+  "and acts as a wrapper for clojure.spec.alpha/and.  This will take a list of
+  specs, find the spec with a codecm, and return a call to s/and with the codec
+  annotated in the metadata"
+  [& codec-forms]
+  (let [specified-codec `(some (fn [form#] (or (and (get-codec form#) form#)
+                                              (-> form# (meta) ::codec)))
+                              [~@codec-forms])]
+    `(with-meta (s/and ~@codec-forms)
+                {::codec ~specified-codec})))
+
+
+(defmacro nilable 
+  "Wrapper for clojure.spec.alpha/nilable.  Allows for nil to be conformed.
+  Most codecs will be ale to handle nil inputs"
+  [codec]
+  `(with-meta (s/nilable ~codec)
+              {::codec (extract-codec ~codec)}))
+
+  
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Common specs that can be used in codec definitions
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
