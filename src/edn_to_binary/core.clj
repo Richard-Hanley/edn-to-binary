@@ -190,6 +190,9 @@
                                                   ::charset :utf-8
                                                   ::null-terminated-strings false}))
 
+;;; Some decoding specs
+(s/def ::byte-size (s/and int? pos?))
+(s/def ::count (s/and int? pos?))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -221,7 +224,7 @@
     (if (s/invalid? args)
       (throw (ex-info "Invalid decoding args for decode" (s/explain-data (s/keys*) decoding-args)))
       (decode* codec 
-               (trim-to-alignment (alignment* codec) bin) 
+               (trim-to-alignment (alignment* codec) (seq bin))
                args))))
 
 (defn recode [specified-codec & encoding-args] 
@@ -298,7 +301,12 @@
                       charset-value)
         {:keys [::primitive-size ::get-charset]} charset-map
         order-instance (get order-map order)
-        charset-instance (get-charset order-instance)]
+        charset-instance (get-charset order-instance)
+        take-until-null (fn [bytes]
+                          (if (= primitive-size 1)
+                            (take-while (complement zero?)  bytes)
+                            (flatten (take-while (complement #(= (repeat primitive-size 0) %))
+                                                 bytes))))]
     (reify Codec
       (alignment* [this] (or force-alignment
                           (min word-size primitive-size)))
@@ -308,7 +316,19 @@
                        (concat byte-string (seq (.getBytes (str \u0000) charset-instance)))
                        byte-string)]
           (make-binary result :align (alignment* this))))
-      (decode* [this bin decoding-args] (throw (UnsupportedOperationException. "Not implemented yet!")))
+      (decode* [this bin decoding-args]
+        (let [{:keys [::byte-size]} decoding-args
+              string-bytes (cond
+                             null-terminated-strings (take-until-null bin)
+                             byte-size (take byte-size bin)
+                             :else bin)
+              string-size (if null-terminated-strings
+                            (+ primitive-size (count string-bytes))
+                            (count string-bytes))
+              remaining (drop string-size bin)]
+          [(String. (byte-array string-bytes) charset-instance)
+           (indexed-binary (+ string-size (current-index bin))
+                           remaining)]))
       (recode* [this enc] (with-meta (string-codec (merge current-enc enc))
                                      (meta this))))))
 
