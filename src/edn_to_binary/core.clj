@@ -111,12 +111,15 @@
   Additional agruments are supported.  Using a :spec or :post-spec argument will add in
   extra specs that might not be part of the passed codec.  The resulting spec will be 
   of the form `(s/and spec codec post-spec) "
-  [k specified-codec & {:keys [spec post-spec]}]
-    (let [final-spec (cond
-                       (and (some? spec) (some? post-spec)) `(s/and ~spec ~specified-codec ~post-spec)
-                       (some? spec) `(s/and ~spec ~specified-codec)
-                       (some? post-spec) `(s/and ~specified-codec ~post-spec)
-                       :else `~specified-codec)]
+  [k specified-codec & {:keys [nilable spec post-spec]}]
+    (let [spec (cond
+                 (and (some? spec) (some? post-spec)) `(s/and ~spec ~specified-codec ~post-spec)
+                 (some? spec) `(s/and ~spec ~specified-codec)
+                 (some? post-spec) `(s/and ~specified-codec ~post-spec)
+                 :else `~specified-codec)
+          final-spec (if nilable
+                       `(s/nilable ~spec)
+                       `~spec)]
   `(do 
      (register-codec ~k (extract-codec ~specified-codec))
      (s/def ~k ~final-spec))))
@@ -478,3 +481,32 @@
                                    registered-codecs)]
     `(with-meta (s/keys :req [~@req] :req-un [~@req-un])
                 {::codec (struct-impl [~@order])})))
+
+(defn union-impl [codec-map]
+  (reify Codec
+      (alignment* [this] (apply max (map alignment (vals codec-map))))
+      (encode* [this [tag data]]
+        (let [codec (get codec-map tag)]
+          (encode codec data)))
+      (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+      (recode* [_ encoding] (union-impl (zipmap (keys codec-map)
+                                                 (mapv #(recode % encoding) (vals codec-map)))))))
+
+(defmacro union [& key-codec-forms]
+  (let [form-pairs (partition 2 key-codec-forms)
+        codec-forms (mapv second form-pairs)
+        codec-keys (mapv first form-pairs)]
+  `(with-meta (s/or ~@key-codec-forms)
+              {::codec (union-impl (zipmap ~codec-keys 
+                                           (mapv extract-codec [~@codec-forms])))})))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Common specs that can be used in codec definitions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn constant-field [field value]
+  (s/conformer #(assoc % field value)))
+
+(defn dependent-field [field f]
+  (s/conformer #(assoc % field (f %))))
+
