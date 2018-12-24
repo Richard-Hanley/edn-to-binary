@@ -9,7 +9,7 @@
 (defprotocol Codec
   (alignment* [this])
   (encode* [this data])
-  (decode* [this bin])
+  (decode* [this bin decoding-args])
   (recode* [this encoding]))
 
 (defprotocol BinaryCollection
@@ -45,6 +45,19 @@
     (if (pos? bytes-over)
       (- align-to bytes-over)
       0)))
+
+(defn indexed-binary [index binary-coll]
+  (with-meta binary-coll
+             (assoc (meta binary-coll) ::index index)))
+
+(defn current-index [binary-coll]
+  (or (::index (meta binary-coll)) 0))
+
+(defn trim-to-alignment [align-to binary-coll]
+  (let [bytes-off (alignment-padding align-to 
+                                     (current-index binary-coll))]
+    (with-meta (drop bytes-off binary-coll)
+               (update (meta binary-coll) ::index (fnil #(+ bytes-off %) 0)))))
 
 (extend-protocol BinaryCollection
   nil
@@ -182,24 +195,34 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Wrappers for Codec protocol that look in the registry
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(defn alignment [specified-codec] 
+(defn alignment 
+  "Returns the alignment of the specified codec"
+  [specified-codec] 
   (let [codec (if (keyword? specified-codec) 
                 (reg-resolve specified-codec)
                 (extract-codec specified-codec))]
     (alignment* codec)))
 
 (defn encode 
+  "Returns an encoded binary collection."
   [specified-codec data] 
    (let [codec (if (keyword? specified-codec) 
                  (reg-resolve specified-codec)
                  (extract-codec specified-codec))]
      (encode* codec data)))
 
-(defn decode [specified-codec bin] 
-  (let [codec (if (keyword? specified-codec) 
+(defn decode [specified-codec bin & decoding-args] 
+  "Given a binary sequence, this will return a tuple with the decoded value, and the
+  rest of the binary that was unused"
+  (let [args (s/conform (s/keys*) decoding-args)
+        codec (if (keyword? specified-codec) 
                 (reg-resolve specified-codec)
                 (extract-codec specified-codec))]
-    (decode* codec bin)))
+    (if (s/invalid? args)
+      (throw (ex-info "Invalid decoding args for decode" (s/explain-data (s/keys*) decoding-args)))
+      (decode* codec 
+               (trim-to-alignment (alignment* codec) bin) 
+               args))))
 
 (defn recode [specified-codec & encoding-args] 
   (let [enc (s/conform (s/keys*) encoding-args)
@@ -224,11 +247,16 @@
                  codec-form)]
      (encode* codec data)))
 
-(defn- raw-decode [codec-form bin] 
-  (let [codec (if (keyword? codec-form) 
+(defn- raw-decode [codec-form bin decoding-args] 
+  (let [args (s/conform (s/keys*) decoding-args)
+        codec (if (keyword? codec-form) 
                 (reg-resolve codec-form)
                 codec-form)]
-    (decode* codec bin)))
+    (if (s/invalid? args)
+      (throw (ex-info "Invalid decoding args for raw decode" (s/explain-data (s/keys) decoding-args)))
+      (decode* codec 
+               (trim-to-alignment (alignment* codec) bin)
+               args))))
 
 (defn- raw-recode [codec-form encoding-args] 
   (let [enc (s/conform (s/keys) encoding-args)
@@ -236,7 +264,7 @@
                 (reg-resolve codec-form)
                 codec-form)]
     (if (s/invalid? enc)
-      (throw (ex-info "Invalid encoding for recode" (s/explain-data (s/keys*) encoding-args)))
+      (throw (ex-info "Invalid encoding for raw recode" (s/explain-data (s/keys) encoding-args)))
       (recode* codec enc))))
 
 
@@ -252,7 +280,14 @@
           _ (put-buffer buff (or data 0))]
       (make-binary (seq (.array buff))
                    :align (alignment* this))))
-  (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+  (decode* [this bin _] 
+    (let [[prim remaining] (split-at size bin)
+          bytes (.order (ByteBuffer/wrap (byte-array prim))
+                         (get order-map (::order enc)))
+          data (get-buffer bytes)]
+      [data
+       (indexed-binary (+ size (current-index bin))
+                       remaining)]))
   (recode* [this encoding] (update this :enc merge encoding)))
 
 (defn string-codec [current-enc]
@@ -273,7 +308,7 @@
                        (concat byte-string (seq (.getBytes (str \u0000) charset-instance)))
                        byte-string)]
           (make-binary result :align (alignment* this))))
-      (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+      (decode* [this bin decoding-args] (throw (UnsupportedOperationException. "Not implemented yet!")))
       (recode* [this enc] (with-meta (string-codec (merge current-enc enc))
                                      (meta this))))))
 
@@ -439,7 +474,7 @@
     (alignment* [_] (max align-to (raw-alignment codec)))
     (encode* [this data] (make-binary (encode codec data)
                                       :align (alignment* this)))
-    (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+    (decode* [this bin decoding-args] (throw (UnsupportedOperationException. "Not implemented yet!")))
     (recode* [this encoding] (align-impl (apply recode codec (clojure.core/flatten (seq encoding))) align-to))))
 
 (defmacro align [codec align-to]
@@ -459,7 +494,7 @@
      (alignment* [_] (raw-alignment codec))
      (encode* [this data] (make-binary (mapv (partial raw-encode codec) data)
                                        :align (alignment* this)))
-     (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+     (decode* [this bin decoding-args] (throw (UnsupportedOperationException. "Not implemented yet!")))
      (recode* [_ encoding] (array-impl (raw-recode codec encoding)))))
   ([codec align-to]
    (let [element-alignment (max align-to (raw-alignment codec))]
@@ -469,7 +504,7 @@
                                                              :align element-alignment)
                                                data)
                                        :align element-alignment))
-       (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+       (decode* [this bin decoding-args] (throw (UnsupportedOperationException. "Not implemented yet!")))
        (recode* [_ encoding] (array-impl (raw-recode codec encoding)))))))
 
 
@@ -502,7 +537,7 @@
     (alignment* [_] (apply max (map raw-alignment codecs)))
     (encode* [this data] (make-binary (map raw-encode codecs data)
                                    :align (alignment this)))
-    (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+    (decode* [this bin decoding-args] (throw (UnsupportedOperationException. "Not implemented yet!")))
     (recode* [_ encoding] (tuple-impl 
                             (map #(raw-recode % encoding)
                                  codecs)))))
@@ -524,7 +559,7 @@
                                                 (map raw-encode codecs (ordered-values data)))
                                         :align (alignment* this)
                                         :key-order key-order))
-      (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+      (decode* [this bin decoding-args] (throw (UnsupportedOperationException. "Not implemented yet!")))
       (recode* [_ encoding] 
         (let [ recoded-codecs (map #(raw-recode % encoding)
                                   codecs)
@@ -577,7 +612,7 @@
       (encode* [this [tag data]]
         (let [codec (get codec-map tag)]
           (raw-encode codec data)))
-      (decode* [this bin] (throw (UnsupportedOperationException. "Not implemented yet!")))
+      (decode* [this bin decoding-args] (throw (UnsupportedOperationException. "Not implemented yet!")))
       (recode* [_ encoding] (union-impl (zipmap (keys codec-map)
                                                  (mapv #(raw-recode % encoding) (vals codec-map)))))))
 
