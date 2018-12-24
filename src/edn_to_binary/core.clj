@@ -191,9 +191,12 @@
                                                   ::null-terminated-strings false}))
 
 ;;; Some decoding specs
-(s/def ::byte-size (s/and int? pos?))
-(s/def ::count (s/and int? pos?))
-
+(s/def ::index (s/and int? pos?))
+(s/def ::byte-size ::index)
+(s/def ::count ::index)
+(s/def ::every-arg (s/keys))
+(s/def ::indexed-args (s/map-of ::index (s/keys)))
+(s/def ::keyed-args (s/map-of keyword? (s/keys)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Wrappers for Codec protocol that look in the registry
@@ -504,6 +507,15 @@
     `(with-meta ~align-spec
                 {::codec (align-impl (extract-codec ~codec) ~align-to)})))
 
+(defn fixed-decoder [codec & fixed-decoding-args]
+  (let [fixed-args (s/conform (s/keys*) fixed-decoding-args)]
+    (reify Codec
+      (alignment* [_] (raw-alignment codec))
+      (encode* [_ data] (raw-encode codec data))
+      (decode* [_ bin decoding-args] (raw-decode codec bin (merge decoding-args fixed-args)))
+      (recode* [_ encoding] (apply fixed-decoder
+                                   (raw-recode codec encoding)
+                                   fixed-decoding-args)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Composite definitions
@@ -514,7 +526,20 @@
      (alignment* [_] (raw-alignment codec))
      (encode* [this data] (make-binary (mapv (partial raw-encode codec) data)
                                        :align (alignment* this)))
-     (decode* [this bin decoding-args] (throw (UnsupportedOperationException. "Not implemented yet!")))
+     (decode* [this bin decoding-args]
+       (let [{:keys [::count ::indexed-args ::every-arg]} decoding-args
+             elem-args (if (some? count)
+                         (map #(merge every-arg (get indexed-args %)) (range count))
+                         (map #(merge every-arg (get indexed-args %)) (range)))]
+         (reduce (fn [[data-accum current-rem] arg]
+                   (let [[new-data bin-rem] (raw-decode codec current-rem arg)
+                         result [(conj data-accum new-data)
+                                 bin-rem]]
+                     (if (empty? bin-rem)
+                       (reduced result)
+                       result)))
+                 [[] bin]
+                 elem-args)))
      (recode* [_ encoding] (array-impl (raw-recode codec encoding)))))
   ([codec align-to]
    (let [element-alignment (max align-to (raw-alignment codec))]
@@ -523,8 +548,21 @@
        (encode* [this data] (make-binary (mapv #(make-binary (raw-encode codec %)
                                                              :align element-alignment)
                                                data)
-                                       :align element-alignment))
-       (decode* [this bin decoding-args] (throw (UnsupportedOperationException. "Not implemented yet!")))
+                                         :align element-alignment))
+       (decode* [this bin decoding-args] 
+         (let [{:keys [::count ::indexed-args ::every-arg]} decoding-args
+               elem-args (if (some? count)
+                           (map #(merge every-arg (get indexed-args %)) (range count))
+                           (map #(merge every-arg (get indexed-args %)) (range)))]
+           (reduce (fn [[data-accum current-rem] arg]
+                     (let [[new-data bin-rem] (raw-decode codec current-rem arg)
+                           result [(conj data-accum new-data)
+                                   bin-rem]]
+                       (if (empty? bin-rem)
+                         (reduced result)
+                         result)))
+                   [[] bin]
+                   elem-args)))
        (recode* [_ encoding] (array-impl (raw-recode codec encoding)))))))
 
 
@@ -536,11 +574,19 @@
   will be conformed into a vector
 
   Second, there is an optional :align field.  The align field will be applied to every
-  element in the array"
+  element in the array
+  
+  If :count is not specified in the arguments, then the decoding args can take a :edn-to-binary.core/count
+  field that will limit the amount of units decoded. Decoding can also support :edn-to-binary.core/indexed-args
+  and :edn-to-binary.core/every-arg
+  "
   [specified-codec & {:keys [align kind count max-count min-count distinct gen-max gen]}]
-  (let [codec-imp  `(if ~align
+  (let [array-imp  `(if ~align
                      (array-impl (extract-codec ~specified-codec) ~align)
-                     (array-impl (extract-codec ~specified-codec)))]
+                     (array-impl (extract-codec ~specified-codec)))
+        codec-imp `(if ~count
+                     (fixed-decoder ~array-imp ::count ~count)
+                     ~array-imp)]
     `(with-meta (s/coll-of ~specified-codec
                            :into []
                            :kind ~kind
