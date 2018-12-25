@@ -611,7 +611,6 @@
                                every-arg
                                (get indexed-args i)
                                (implicit-fn data-accum decoding-args))
-                        _ (println args)
                         [new-data bin-rem] (raw-decode codec current-rem args)]
                     [(conj data-accum new-data)
                      bin-rem]))
@@ -619,7 +618,8 @@
                 (map-indexed vector codecs))))
     (recode* [_ encoding] (tuple-impl 
                             (map #(raw-recode % encoding)
-                                 codecs)))))
+                                 codecs)
+                            implicit-decoders))))
 
 (defmacro tuple 
   "Takes one or more specified codecs and returns a tuple spec/codec.
@@ -631,7 +631,7 @@
   `(with-meta (s/tuple ~@specified-codecs)
               {::codec (tuple-impl (mapv extract-codec [~@specified-codecs] nil))}))
 
-(defn struct-impl [key-codec-pairs]
+(defn struct-impl [key-codec-pairs implicit-decoders]
   (let [key-order (map first key-codec-pairs)
         codecs (map second key-codec-pairs)
         ordered-values (fn [coll]
@@ -642,7 +642,19 @@
                                                 (map raw-encode codecs (ordered-values data)))
                                         :align (alignment* this)
                                         :key-order key-order))
-      (decode* [this bin decoding-args] (throw (UnsupportedOperationException. "Not implemented yet!")))
+      (decode* [this bin decoding-args] 
+        (let [{:keys [::indexed-args ::every-arg]} decoding-args]
+          (reduce (fn [[data-accum current-rem] [k codec]]
+                    (let [implicit-fn (get implicit-decoders k (constantly nil))
+                          args (merge 
+                                 every-arg
+                                 (get indexed-args k)
+                                 (implicit-fn data-accum decoding-args))
+                          [new-data bin-rem] (raw-decode codec current-rem args)]
+                      [(assoc data-accum k new-data)
+                       bin-rem]))
+                  [{} bin]
+                  (map vector key-order codecs))))
       (recode* [_ encoding] 
         (let [ recoded-codecs (map #(raw-recode % encoding)
                                   codecs)
@@ -687,7 +699,7 @@
                                    [[] [] []]
                                    registered-codecs)]
     `(with-meta (s/keys :req [~@req] :req-un [~@req-un])
-                {::codec (struct-impl [~@order])})))
+                {::codec (struct-impl [~@order] nil)})))
 
 (defn union-impl [codec-map]
   (reify Codec
