@@ -254,7 +254,7 @@
      (encode* codec data)))
 
 (defn- raw-decode [codec-form bin decoding-args] 
-  (let [args (s/conform (s/keys*) decoding-args)
+  (let [args (s/conform (s/keys) (or decoding-args {}))
         codec (if (keyword? codec-form) 
                 (reg-resolve codec-form)
                 codec-form)]
@@ -598,21 +598,38 @@
                            :gen ~gen)
                 {::codec ~codec-imp})))
 
-(defn tuple-impl [codecs]
+(defn tuple-impl [codecs implicit-decoders]
   (reify Codec
     (alignment* [_] (apply max (map raw-alignment codecs)))
     (encode* [this data] (make-binary (map raw-encode codecs data)
                                    :align (alignment this)))
-    (decode* [this bin decoding-args] (throw (UnsupportedOperationException. "Not implemented yet!")))
+    (decode* [this bin decoding-args] 
+      (let [{:keys [::indexed-args ::every-arg]} decoding-args]
+        (reduce (fn [[data-accum current-rem] [i codec]]
+                  (let [implicit-fn (get implicit-decoders i (constantly nil))
+                        args (merge 
+                               every-arg
+                               (get indexed-args i)
+                               (implicit-fn data-accum decoding-args))
+                        _ (println args)
+                        [new-data bin-rem] (raw-decode codec current-rem args)]
+                    [(conj data-accum new-data)
+                     bin-rem]))
+                [[] bin]
+                (map-indexed vector codecs))))
     (recode* [_ encoding] (tuple-impl 
                             (map #(raw-recode % encoding)
                                  codecs)))))
 
 (defmacro tuple 
-  "Takes one or more specified codecs and returns a tuple spec/codec."
+  "Takes one or more specified codecs and returns a tuple spec/codec.
+
+  Tuple decoders support ::indexed-args and ::every-arg, along with an implicit
+  decoder function
+  "
   [& specified-codecs]
   `(with-meta (s/tuple ~@specified-codecs)
-              {::codec (tuple-impl (mapv extract-codec [~@specified-codecs]))}))
+              {::codec (tuple-impl (mapv extract-codec [~@specified-codecs] nil))}))
 
 (defn struct-impl [key-codec-pairs]
   (let [key-order (map first key-codec-pairs)
