@@ -628,7 +628,6 @@
     (= #'implicit-decoder (resolve maybe-sym))
     nil))
 
-
 (defmacro tuple 
   "Takes one or more specified codecs and returns a tuple spec/codec.
 
@@ -708,7 +707,17 @@
   would conform a map of {::foo ... :bar ... :baz ...} The order is maintianed, but :bar
   and :baz no longer need their namespace"
   [& registered-codecs]
-  (let [unk #(-> % name keyword)
+  (let [[implicit-decoders specs] (reduce 
+                                    (fn [[de sp] [sc]]
+                                      (if (seq? sc)
+                                        (let [[sym decoder key] sc]
+                                          (if (implicit-decoder? sym)
+                                            [(assoc de key decoder) (conj sp key)]
+                                            (throw (IllegalArgumentException. "Only implicit decoders may be called from struct field"))))
+                                        [de (conj sp sc)]))
+                                    [{} []]
+                                    )
+        unk #(-> % name keyword)
         qualified-order (fn [k] [k k])
         unqualified-order (fn [k] [(unk k) k])
         [req req-un order] (reduce (fn [[req req-un order] f]
@@ -721,9 +730,9 @@
 
 
                                    [[] [] []]
-                                   registered-codecs)]
+                                   specs)]
     `(with-meta (s/keys :req [~@req] :req-un [~@req-un])
-                {::codec (struct-impl [~@order] nil)})))
+                {::codec (struct-impl [~@order] ~implicit-decoders)})))
 
 (defn union-impl [codec-map]
   (reify Codec
