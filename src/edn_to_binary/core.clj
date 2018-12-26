@@ -684,6 +684,13 @@
               args (map vector key-order recoded-codecs)]
           (struct-impl args))))))
 
+(defn unqualified [_] nil)
+
+(defn unqualified? [maybe-sym]
+  (if (symbol? maybe-sym) 
+    (= #'unqualified (resolve maybe-sym))
+    nil))
+
 
 (defmacro struct 
   "Takes a list of registered spec/codecs and creates a map spec/codec.
@@ -702,10 +709,13 @@
 
   However, the following call:
   (e/struct ::foo
-            (:unqualified ::bar)
-            (:unqualified ::baz))
+            (unqualified ::bar)
+            (unqualified ::baz))
   would conform a map of {::foo ... :bar ... :baz ...} The order is maintianed, but :bar
-  and :baz no longer need their namespace"
+  and :baz no longer need their namespace
+
+  structs can also use implicit-decoders
+  "
   [& registered-codecs]
   (let [[implicit-decoders specs] (reduce 
                                     (fn [[de sp] sc]
@@ -724,7 +734,7 @@
                                      (cond 
                                        (keyword? f) [(conj req f) req-un (conj order (qualified-order f))]
                                        (and (seq? f)
-                                            (= (first f) :unqualified)) [req (conj req-un (second f)) (conj order (unqualified-order (second f)))]
+                                            (unqualified? (first f))) [req (conj req-un (second f)) (conj order (unqualified-order (second f)))]
                                        :else (throw (ex-info "Struct field is not qualified keyword or unqualified sequence"
                                                              {:field f}))))
 
