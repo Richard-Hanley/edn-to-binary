@@ -666,12 +666,12 @@
                                         :align (alignment* this)
                                         :key-order key-order))
       (decode* [this bin decoding-args] 
-        (let [{:keys [::indexed-args ::every-arg]} decoding-args]
+        (let [{:keys [::keyed-args ::every-arg]} decoding-args]
           (reduce (fn [[data-accum current-rem] [k codec]]
                     (let [implicit-fn (get implicit-decoders k (constantly nil))
                           args (merge 
                                  every-arg
-                                 (get indexed-args k)
+                                 (get keyed-args k)
                                  (implicit-fn data-accum decoding-args))
                           [new-data bin-rem] (raw-decode codec current-rem args)]
                       [(assoc data-accum k new-data)
