@@ -191,7 +191,7 @@
                                                   ::null-terminated-strings false}))
 
 ;;; Some decoding specs
-(s/def ::index (s/and int? pos?))
+(s/def ::index (s/and int? (complement neg?)))
 (s/def ::byte-size ::index)
 (s/def ::count ::index)
 (s/def ::every-arg (s/keys))
@@ -621,15 +621,39 @@
                                  codecs)
                             implicit-decoders))))
 
+(def implicit-decoder)
+
+(defn implicit-decoder? [maybe-sym]
+  (if (symbol? maybe-sym) 
+    (= #'implicit-decoder (resolve maybe-sym))
+    nil))
+
+
 (defmacro tuple 
   "Takes one or more specified codecs and returns a tuple spec/codec.
 
   Tuple decoders support ::indexed-args and ::every-arg, along with an implicit
   decoder function
+
+  Each specified codec may be an implicit-decoder. An implicit decoder takes
+  a function of data accumulated so far, and the decoding arguments, and returns
+  a map that can be used as decoding margs.  This is called using a sequence
+  (e/implicit-decoder
+    (fn [data args] ....)
+    codec)
   "
   [& specified-codecs]
-  `(with-meta (s/tuple ~@specified-codecs)
-              {::codec (tuple-impl (mapv extract-codec [~@specified-codecs] nil))}))
+  (let [[implicit-decoders specs] (reduce 
+                                    (fn [[de sp] [i sc]]
+                                      (if (seq? sc)
+                                        (if (implicit-decoder? (first sc))
+                                          [(assoc de i (nth sc 1)) (conj sp (nth sc 2))]
+                                          [de (conj sp sc)])
+                                        [de (conj sp sc)]))
+                                    [{} []]
+                                    (map-indexed vector specified-codecs))]
+  `(with-meta (s/tuple ~@specs)
+              {::codec (tuple-impl (mapv extract-codec [~@specs]) ~implicit-decoders)})))
 
 (defn struct-impl [key-codec-pairs implicit-decoders]
   (let [key-order (map first key-codec-pairs)
