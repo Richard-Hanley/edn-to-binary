@@ -708,7 +708,7 @@
   and :baz no longer need their namespace"
   [& registered-codecs]
   (let [[implicit-decoders specs] (reduce 
-                                    (fn [[de sp] [sc]]
+                                    (fn [[de sp] sc]
                                       (if (seq? sc)
                                         (let [[sym decoder key] sc]
                                           (if (implicit-decoder? sym)
@@ -716,7 +716,7 @@
                                             (throw (IllegalArgumentException. "Only implicit decoders may be called from struct field"))))
                                         [de (conj sp sc)]))
                                     [{} []]
-                                    )
+                                    registered-codecs)
         unk #(-> % name keyword)
         qualified-order (fn [k] [k k])
         unqualified-order (fn [k] [(unk k) k])
