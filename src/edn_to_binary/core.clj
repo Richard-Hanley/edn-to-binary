@@ -744,6 +744,7 @@
     `(with-meta (s/keys :req [~@req] :req-un [~@req-un])
                 {::codec (struct-impl [~@order] ~implicit-decoders)})))
 
+;TODO Add in support for decoding with tagged union
 (defn union-impl [codec-map]
   (reify Codec
       (alignment* [this] (apply max (map raw-alignment (vals codec-map))))
@@ -762,6 +763,8 @@
               {::codec (union-impl (zipmap ~codec-keys 
                                            (mapv extract-codec [~@codec-forms])))})))
   
+;TODO Add in some support for a multicodec
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Common specs that can be used in codec definitions
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
