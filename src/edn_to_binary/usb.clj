@@ -24,19 +24,22 @@
 (e/def ::iSerialNumber ::e/uint8)
 (e/def ::bNumConfigurations ::e/uint8)
 
-(e/def ::device (e/struct ::bLength
-                          ::bDescriptorType
-                          ::bDeviceClass
-                          ::bDeviceSubClass
-                          ::bDeviceProtocol
-                          ::bMaxPacketSize
-                          ::idVendor
-                          ::idProduct
-                          ::bcdDevice
-                          ::iManufacturer
-                          ::iProduct
-                          ::iSerialNumber
-                          ::bNumConfigurations))
+(e/def ::device (e/and (e/struct ::bLength
+                                 ::bDescriptorType
+                                 ::bcdUSB
+                                 ::bDeviceClass
+                                 ::bDeviceSubClass
+                                 ::bDeviceProtocol
+                                 ::bMaxPacketSize
+                                 ::idVendor
+                                 ::idProduct
+                                 ::bcdDevice
+                                 ::iManufacturer
+                                 ::iProduct
+                                 ::iSerialNumber
+                                 ::bNumConfigurations)
+                       (e/constant-field ::bDescriptorType 0x01)
+                       (length-conformer ::device)))
 
 (e/def ::wTotalLength ::e/uint16)
 (e/def ::bNumInterfaces ::e/uint8)
@@ -102,4 +105,14 @@
          (e/dependent-field ::bNumDescriptors #(count (::reports %)))
          (e/constant-field ::bDescriptorType 0x21)
          (length-conformer ::hid)))
+
+;; TODO get a full configuration working
+(e/def ::full-config ::config)
+
+(e/def 
+  ::descriptor
+  (e/tuple ::device
+           (e/implicit-decoder (fn [data _]
+                                 {::e/count (::bNumConfigurations (first data))})
+                               (e/array ::full-config))))
 

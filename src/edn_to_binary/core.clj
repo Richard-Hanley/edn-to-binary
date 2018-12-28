@@ -621,7 +621,7 @@
                                  codecs)
                             implicit-decoders))))
 
-(def implicit-decoder)
+(def implicit-decoder (constantly nil))
 
 (defn implicit-decoder? [maybe-sym]
   (if (symbol? maybe-sym) 
@@ -664,7 +664,7 @@
       (encode* [this data] (make-binary (zipmap key-order
                                                 (map raw-encode codecs (ordered-values data)))
                                         :align (alignment* this)
-                                        :key-order key-order))
+                                        :order key-order))
       (decode* [this bin decoding-args] 
         (let [{:keys [::keyed-args ::every-arg]} decoding-args]
           (reduce (fn [[data-accum current-rem] [k codec]]
@@ -684,7 +684,7 @@
               args (map vector key-order recoded-codecs)]
           (struct-impl args))))))
 
-(defn unqualified [_] nil)
+(def unqualified (constantly nil))
 
 (defn unqualified? [maybe-sym]
   (if (symbol? maybe-sym) 
