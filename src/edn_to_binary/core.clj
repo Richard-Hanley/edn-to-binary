@@ -34,6 +34,20 @@
 (defn current-index [binary-coll]
   (or (::index (meta binary-coll)) 0))
 
+(defn binary-coll-alignment 
+  "Gets the alignment of a binary collection.  If none is specified, it will
+  return 1"
+  [bin]
+  (or (::alignment (meta bin)) 1))
+
+(defn binary-order 
+  "This will get the key order for associative binary collections
+  If no key order is specified, then key order will be gotten from a 
+  call to keys"
+  [coll]
+  (or (::key-order (meta coll)) (keys coll)))
+
+
 (defn alignment-padding [align-to position]
   (let [bytes-over (mod position align-to)]
     (if (pos? bytes-over)
@@ -191,7 +205,8 @@
 
 
 (defmacro signed-primitive-spec [class]
-  `#(<= (. ~class MIN_VALUE) %1 (. ~class MAX_VALUE)))
+  `#(or (zero? %1)
+        (<= (. ~class MIN_VALUE) %1 (. ~class MAX_VALUE))))
 
 (defmacro unsigned-primitive-spec [class]
   `(s/int-in 0 (bit-shift-left 1 (. ~class SIZE))))
@@ -220,12 +235,12 @@
                        remaining)])))
 
 (def primitive-codecs
-  {Byte (map->PrimitiveCodec {:get-buffer #(.get %1 %2) :put-buffer #(.put %1 %2) :size (Byte/BYTES) :coerce-from identity})
-   Short (map->PrimitiveCodec {:get-buffer #(.getShort %1 %2) :put-buffer #(.putShort %1 %2) :size (Short/BYTES) :coerce-from identity})
-   Integer (map->PrimitiveCodec {:get-buffer #(.getInt %1 %2) :put-buffer #(.putInt %1 %2) :size (Short/BYTES) :coerce-from identity})
-   Long (map->PrimitiveCodec {:get-buffer #(.getLong %1 %2) :put-buffer #(.putLong %1 %2) :size (Integer/BYTES) :coerce-from identity})
-   Float (map->PrimitiveCodec {:get-buffer #(.getFloat %1 %2) :put-buffer #(.putFloat %1 %2) :size (Float/BYTES) :coerce-from identity})
-   Double (map->PrimitiveCodec {:get-buffer #(.getDouble %1 %2) :put-buffer #(.putDouble %1 %2) :size (Double/BYTES) :coerce-from identity})})
+  {Byte (map->PrimitiveCodec {:get-buffer #(.get %) :put-buffer #(.put %1 (unchecked-byte %2)) :size (Byte/BYTES) :coerce-from identity})
+   Short (map->PrimitiveCodec {:get-buffer #(.getShort %) :put-buffer #(.putShort %1 (unchecked-short %2)) :size (Short/BYTES) :coerce-from identity})
+   Integer (map->PrimitiveCodec {:get-buffer #(.getInt %) :put-buffer #(.putInt %1 (unchecked-int %2)) :size (Integer/BYTES) :coerce-from identity})
+   Long (map->PrimitiveCodec {:get-buffer #(.getLong %) :put-buffer #(.putLong %1 (unchecked-long %2)) :size (Long/BYTES) :coerce-from identity})
+   Float (map->PrimitiveCodec {:get-buffer #(.getFloat %) :put-buffer #(.putFloat %1 (unchecked-float %2)) :size (Float/BYTES) :coerce-from identity})
+   Double (map->PrimitiveCodec {:get-buffer #(.getDouble %) :put-buffer #(.putDouble %1 (unchecked-double %2)) :size (Double/BYTES) :coerce-from identity})})
 
 
 (defmacro primitive [prim & encoding]
@@ -242,7 +257,7 @@
         enc `(if (s/valid? (s/keys*) [~@encoding])
                (s/conform (s/keys*) [~@encoding])
                (throw (ex-info "Unable to conform encoding" (s/explain-data (s/keys*) [~@encoding]))))]
-  `(with-meta (signed-primitive-spec ~prim)
+  `(with-meta (unsigned-primitive-spec ~prim)
               {::codec (merge ~c ~enc)})))
 
 
@@ -255,5 +270,5 @@
 (edn-to-binary.core/def ::uint16 (unsigned-primitive Short))
 (edn-to-binary.core/def ::uint32 (unsigned-primitive Integer))
 
-(edn-to-binary.core/def ::float32 (primitive Float))
-(edn-to-binary.core/def ::float64 (primitive Double))
+(edn-to-binary.core/def ::float (primitive Float))
+(edn-to-binary.core/def ::double (primitive Double))
