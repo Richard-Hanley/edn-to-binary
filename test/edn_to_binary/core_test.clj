@@ -223,3 +223,53 @@
       (is (= 0xDEADBEEF (first (e/decode :little/uint32 (:little int-test))))))))
 
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;Testing Binary collection building and flattening
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(testing "make binary"
+  (testing "alignment of made binary"
+    (is (= 1 (e/binary-coll-alignment (e/make-binary [1 2 3]))))
+    (is (= 1 (e/binary-coll-alignment (e/make-binary [1 2 3] :align 1))))
+    (is (= 2 (e/binary-coll-alignment (e/make-binary [1 2 3] :align 2))))
+    (is (= 4 (e/binary-coll-alignment (e/make-binary [1 2 3] :align 4))))
+    (is (= 8 (e/binary-coll-alignment (e/make-binary [1 2 3] :align 8)))))
+  (testing "order of a binary"
+    (is (= [:foo ::bar :baz] (e/binary-order (e/make-binary {:foo 1 ::bar 2 :baz 3}))))
+    (is (= [:foo] (e/binary-order (e/make-binary {:foo 1 ::bar 2 :baz 3} :key-order [:foo]))))
+    (is (= [::bar :baz :foo] (e/binary-order (e/make-binary {:foo 1 ::bar 2 :baz 3} :key-order [::bar :baz :foo]))))))
+
+(testing "flatten"
+  (testing "sequential"
+    (testing "no alignment"
+      (let [bin [(e/encode ::e/uint8 17) (e/encode ::e/uint32 101) (e/encode ::e/uint16 25)]]
+        (is (= 7 (e/sizeof bin)))
+        (is (= [17 101 0 0 0 25 0] (e/flatten bin))))) 
+    (testing "alignment"
+      (let [bin [(e/encode :aligned/uint8 17) (e/encode :aligned/uint32 101) (e/encode :aligned/uint16 25)]]
+        (is (= 10 (e/sizeof bin)))
+        (is (= [17 0 0 0 101 0 0 0 25 0] (e/flatten bin))))))
+  (testing "associative"
+    (testing "no alignment"
+      (let [bin {:foo (e/encode ::e/uint8 17) ::bar (e/encode ::e/uint32 101) :baz (e/encode ::e/uint16 25)}]
+        (is (= 7 (e/sizeof bin)))
+        (is (= [17 101 0 0 0 25 0] (e/flatten bin))))) 
+    (testing "alignment"
+      (let [bin {:foo (e/encode :aligned/uint8 17) ::bar (e/encode :aligned/uint32 101) :baz (e/encode :aligned/uint16 25)}]
+        (is (= 10 (e/sizeof bin)))
+        (is (= [17 0 0 0 101 0 0 0 25 0] (e/flatten bin))))))
+  (testing "re-ordered associative"
+    (testing "no alignment"
+      (let [bin (e/make-binary {:foo (e/encode ::e/uint8 17) 
+                              ::bar (e/encode ::e/uint32 101) 
+                              :baz (e/encode ::e/uint16 25)}
+                             :key-order [:baz ::bar :foo])]
+        (is (= 7 (e/sizeof bin)))
+        (is (= [25 0 101 0 0 0 17] (e/flatten bin))))) 
+    (testing "alignment"
+      (let [bin (e/make-binary {:foo (e/encode :aligned/uint8 17) 
+                                ::bar (e/encode :aligned/uint32 101) 
+                                :baz (e/encode :aligned/uint16 25)}
+                               :key-order [:baz ::bar :foo])]
+        (is (= 9 (e/sizeof bin)))
+        (is (= [25 0 0 0 101 0 0 0 17] (e/flatten bin)))))))
+

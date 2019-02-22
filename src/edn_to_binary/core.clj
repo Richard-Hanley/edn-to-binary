@@ -22,10 +22,12 @@
   collections may be sequential or associative
 
   Binary collections can have metadata that sets the alignment, or in the
-  case of maps a key order"
-  [bin & {:keys [order align]}]
+  case of maps a key order
+
+  Optional arguments are :key-order and :align"
+  [bin & {:keys [key-order align]}]
   (with-meta bin
-             (assoc (meta bin) ::alignment align ::key-order order)))
+             (assoc (meta bin) ::alignment align ::key-order key-order)))
 
 (defn indexed-binary [index binary-coll]
   (with-meta binary-coll
@@ -47,6 +49,10 @@
   [coll]
   (or (::key-order (meta coll)) (keys coll)))
 
+(defn sizeof 
+  "Given a bianry collection, this will return the size in bytes of the collection when alignment is applied"
+  [bin]
+  (count (flatten bin)))
 
 (defn alignment-padding [align-to position]
   (let [bytes-over (mod position align-to)]
@@ -59,6 +65,37 @@
                                      (current-index binary-coll))]
     (with-meta (drop bytes-off binary-coll)
                (update (meta binary-coll) ::index (fnil #(+ bytes-off %) 0)))))
+
+(extend-protocol BinaryCollection
+  nil
+  (flatten [this] nil)
+
+  clojure.lang.Keyword
+  (flatten [this] nil)
+
+  Byte
+  (flatten [this] (list this))
+
+  clojure.lang.Sequential
+  (flatten [this]
+    (let [coll-alignment (binary-coll-alignment this)
+          [bin elem-alignment] (reduce (fn [[accum max-alignment] elem]
+                                         (let [elem-alignment (binary-coll-alignment elem)
+                                               padding (repeat (alignment-padding elem-alignment
+                                                                                  (count accum))
+                                                               (byte 0))]
+                                           [(concat accum padding elem)
+                                            (max elem-alignment max-alignment)]))
+                                       [[] 1]
+                                       (map flatten this))]
+          (make-binary bin :align (max coll-alignment elem-alignment))))
+  clojure.lang.IPersistentMap
+  (flatten [this]
+    (let [coll-alignment (binary-coll-alignment this)
+          ordered-vals (map #(get this %) (binary-order this))
+          bin (flatten ordered-vals)]
+      (make-binary bin :align (max coll-alignment (binary-coll-alignment bin))))))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Managing the codec registry and the spec metadata
@@ -272,3 +309,5 @@
 
 (edn-to-binary.core/def ::float (primitive Float))
 (edn-to-binary.core/def ::double (primitive Double))
+
+
