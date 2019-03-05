@@ -222,6 +222,10 @@
       (is (= 0xFE (first (e/decode :little/uint8 [(unchecked-byte 0xFE)]))))
       (is (= 0xDEADBEEF (first (e/decode :little/uint32 (:little int-test))))))))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Composite types
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;Testing Binary collection building and flattening

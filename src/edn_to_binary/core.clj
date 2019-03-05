@@ -310,4 +310,25 @@
 (edn-to-binary.core/def ::float (primitive Float))
 (edn-to-binary.core/def ::double (primitive Double))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;Codec wrappers
+
+(defn align-impl [raw-codec align-to]
+  (reify Codec
+    (implicit?* [_] (raw-implicit? raw-codec))
+    (alignment* [_] align-to)
+    (encode* [_ data] (make-binary (raw-encode raw-codec data) :align align-to))
+    (decode* [_ binary args] 
+      (let [trimmed-bin (trim-to-alignment align-to binary)]
+        (raw-decode raw-codec binary args)))))
+
+(defmacro align 
+  "Takes a given codec, and forces the alignment to align-to"
+  [codec-spec align-to]
+  (let [align-spec (if (keyword? codec-spec)
+                     `(s/spec ~codec-spec)
+                     `codec)]
+    `(with-meta ~align-spec
+                {::codec (align-impl (extract-codec ~codec-spec) ~align-to)})))
+
 
