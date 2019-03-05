@@ -7,7 +7,6 @@
             [clojure.set :as set]))
 
 (defprotocol Codec
-  (implicit?* [this])
   (alignment* [this])
   (encode* [this data])
   (decode* [this binary args]))
@@ -151,14 +150,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Wrappers for Codec protocol that look in the registry
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(defn implicit?
-  "Returns whether a codec is implicit"
-  [specified-codec] 
-  (let [codec (if (keyword? specified-codec) 
-                (reg-resolve specified-codec)
-                (extract-codec specified-codec))]
-    (implicit?* codec)))
-
 (defn alignment 
   "Returns the alignment of the specified codec"
   [specified-codec] 
@@ -212,14 +203,6 @@
                (trim-to-alignment (alignment* codec) bin)
                args))))
  
-(defn- raw-implicit?
-  [codec-form] 
-  (let [codec (if (keyword? codec-form) 
-                (reg-resolve codec-form)
-                codec-form)]
-    (implicit?* codec)))
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;Specs for encoding codecs
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -250,7 +233,6 @@
 
 (defrecord PrimitiveCodec [size get-buffer put-buffer coerce-from]
   Codec
-  (implicit?* [this] true)
   (alignment* [this]
     (let [{:keys [::force-alignment ::word-size] 
            :or {force-alignment nil word-size 1}} this]
@@ -315,7 +297,6 @@
 
 (defn align-impl [raw-codec align-to]
   (reify Codec
-    (implicit?* [_] (raw-implicit? raw-codec))
     (alignment* [_] align-to)
     (encode* [_ data] (make-binary (raw-encode raw-codec data) :align align-to))
     (decode* [_ binary args] 
