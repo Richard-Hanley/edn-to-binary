@@ -292,6 +292,14 @@ To give some control at runtime to the decoder, there are optional arguments tha
 
 ## TODO
 
+Support for a string primitive needs to be added.  A string would have to support multiple encodings and word sizes
+
+Support for union types should be supported.  This would be an extension of `s/or` types.  Enoding a union type should be very simple, but decoding may be really tricky, because there would need to be a way to tag unions in a binary collection.
+
+Spec has support for mutlimethods, and that would be really nice to support.  A multi-codec would have the same issues as a union type, but it is also hard to create a useable API.  
+
+Spec also has support for ad-hoc sequences and regexs.  This would be really nice to have because sometimes binary data comes in regex form.  Although I really don't know how that would be decoded
+
 ## License
 
 Copyright © 2018 Richard Hanley
