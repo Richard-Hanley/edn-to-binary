@@ -277,3 +277,30 @@
         (is (= 9 (e/sizeof bin)))
         (is (= [25 0 0 0 101 0 0 0 17] (e/flatten bin)))))))
 
+
+(testing "array codecs"
+  (testing "alignment"
+    (is (= 1 (e/alignment (e/array ::e/uint16))))
+    (is (= 4 (e/alignment (e/array (e/align ::e/uint16 4)))))
+    (is (= 8 (e/alignment (e/array (e/align ::e/uint16 8))))))
+  (let [arr-unbd (e/array ::e/uint16)
+        arr-bd (e/array ::e/uint16 :count 3)]
+    (testing "array conformance"
+      (testing "unbounded"
+        (is (= [1 2 3 4] (s/conform arr-unbd [1 2 3 4])))
+        (is (s/invalid? (s/conform arr-unbd nil)))
+        (is (s/invalid? (s/conform arr-unbd [1 2 3 4 -5]))))
+      (testing "bounded"
+        (is (= [1 2 3] (s/conform arr-bd [1 2 3])))
+        (is (s/invalid? (s/conform arr-bd nil)))
+        (is (s/invalid? (s/conform arr-bd [1 2 3 4])))))
+    (testing "encoding to binary elements"
+        (is (= 8 (e/sizeof (e/encode arr-bd [1 2 3 4]))))
+        (is (= [1 0 2 0 3 0 4 0] (e/flatten (e/encode arr-unbd [1 2 3 4])))))
+    (testing "decoding to a binary structure"
+      (testing "unbounded"
+        (is (= [1 2 3 4] (first (e/decode arr-unbd [1 0 2 0 3 0 4 0])))))
+      (testing "bounded with arguments"
+        (let [[data rem] (e/decode arr-bd [1 0 2 0 3 0 4 0] ::e/count 3)]
+          (is (= [1 2 3] data))
+          (is (= [4 0] rem)))))))

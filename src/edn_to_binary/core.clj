@@ -294,6 +294,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;Codec wrappers
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn align-impl [raw-codec align-to]
   (reify Codec
@@ -312,4 +313,147 @@
     `(with-meta ~align-spec
                 {::codec (align-impl (extract-codec ~codec-spec) ~align-to)})))
 
+(defmacro and 
+  "and acts as a wrapper for clojure.spec.alpha/and.  This will take a list of
+  specs, find the spec with a codec, and return a call to s/and with the codec
+  annotated in the metadata"
+  [& codec-forms]
+  (let [specified-codec `(some (fn [form#] (or (and (get-codec form#) form#)
+                                              (-> form# (meta) ::codec)))
+                              [~@codec-forms])]
+    `(with-meta (s/and ~@codec-forms)
+                {::codec ~specified-codec})))
 
+
+(defmacro nilable 
+  "Wrapper for clojure.spec.alpha/nilable.  Allows for nil to be conformed.
+  Most codecs will be ale to handle nil inputs"
+  [codec]
+  `(with-meta (s/nilable ~codec)
+              {::codec (extract-codec ~codec)}))
+
+;;TODO Add a wrapping spec macro on top of this, so users could create fixed decoders
+(defn fixed-decoder 
+  "A fixed decoder is a wrapper around a codec implementation that will always 
+  apply the given decoding arguments"
+  [codec & fixed-decoding-args]
+  (let [fixed-args (s/conform (s/keys*) fixed-decoding-args)]
+    (reify Codec
+      (alignment* [_] (raw-alignment codec))
+      (encode* [_ data] (raw-encode codec data))
+      (decode* [_ bin decoding-args] (raw-decode codec bin (merge decoding-args fixed-args))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Composite Types
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(defn array-impl 
+  ([codec]
+   (reify Codec
+     (alignment* [_] (raw-alignment codec))
+     (encode* [this data] (make-binary (mapv (partial raw-encode codec) data)
+                                       :align (alignment* this)))
+     (decode* [this bin decoding-args]
+       (let [count (::count decoding-args) 
+             child-args (or (::child-args decoding-args) (constantly nil)) 
+             elem-args (if (some? count)
+                         (map #(child-args decoding-args %) (range count))
+                         (map #(child-args decoding-args %) (range)))]
+         (reduce (fn [[data-accum current-rem] arg]
+                   (let [[new-data bin-rem] (raw-decode codec current-rem arg)
+                         result [(conj data-accum new-data)
+                                 bin-rem]]
+                     (if (empty? bin-rem)
+                       (reduced result)
+                       result)))
+                 [[] bin]
+                 elem-args))))))
+
+(defmacro array 
+  "Create an array codec and spec.
+  The array macro takes the same arguments as s/coll-of and s/every, with one differences
+  There is no support for an :into argument.  All results from the array spec
+  will be conformed into a vector
+
+  If :count is not specified in the arguments, then the decoding args can take a :edn-to-binary.core/count
+  field that will limit the amount of units decoded. 
+
+  The decoding argumments take an additional field ::child-args, which is expected to be a function
+  of the form (fn [array-args index]), and will return the child arguments.  If this is null, then 
+  no arguments will be sent to child elements
+
+  Arrays do not support implicit decoders
+  "
+  [specified-codec & {:keys [align kind count max-count min-count distinct gen-max gen]}]
+  (let [array-imp  `(array-impl (extract-codec ~specified-codec))
+        codec-imp `(if ~count
+                     (fixed-decoder ~array-imp ::count ~count)
+                     ~array-imp)]
+    `(with-meta (s/coll-of ~specified-codec
+                           :into []
+                           :kind ~kind
+                           :count ~count
+                           :max-count ~max-count
+                           :min-count ~min-count
+                           :distinct ~distinct
+                           :gen-max ~gen-max
+                           :gen ~gen)
+                {::codec ~codec-imp})))
+
+
+
+(defmacro tuple 
+  "Takes one or more specified codecs and returns a tuple spec/codec.
+
+  Each specified codec may be an implicit-decoder. An implicit decoder takes
+  a function of data accumulated so far, and the decoding arguments, and returns
+  a map that can be used as decoding margs.  This is called using a sequence
+  (e/implicit-decoder
+    (fn [data args] ....)
+    codec)
+  "
+  [& specified-codecs]
+  )
+
+(defmacro struct 
+  "Takes a list of registered spec/codecs and creates a map spec/codec.
+
+  Spec requires that all maps are conformed with fully qualified keywords. That is why calls
+  to spec take the form '(s/keys :req [...] :req-un [...])
+
+  This is a bit of a problem for codecs, since order is very importatnt to a struct.
+  So a struct takes a list of arguments.  Args can either be keywords or sequences.
+
+  The following call:
+  (e/struct ::foo
+            ::bar
+            ::baz)
+  would conform a map of {::foo ... ::bar ... ::baz ...} and encode in that order
+
+  However, the following call:
+  (e/struct ::foo
+            (unqualified ::bar)
+            (unqualified ::baz))
+  would conform a map of {::foo ... :bar ... :baz ...} The order is maintianed, but :bar
+  and :baz no longer need their namespace
+
+  structs can also use implicit-decoders
+  "
+  [& registered-codecs]
+  )
+
+(defmacro union [& key-codec-forms])
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Common specs that can be used in codec definitions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn constant-field [field value]
+  (s/conformer #(assoc % field value)))
+
+(defn dependent-field [field f]
+  (s/conformer #(assoc % field (f %))))
+
+ 
