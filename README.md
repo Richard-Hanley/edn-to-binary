@@ -234,7 +234,7 @@ Structs are ordered maps.  The `e/struct` macro wraps `s/keys` while maintaining
 ;;=>{::foo (12) ::bar (20 0) ::baz (-12 -1 -1 -1)}
 
 (e/flatten (e/encode ::st {::foo 12 ::bar 20 ::baz -12}))
-;;=>{12 20 0 -12 -1 -1 -1)
+;;=>(12 20 0 -12 -1 -1 -1)
 ```
 
 ## Decoding
@@ -247,6 +247,45 @@ Decoding is done through a similar method as encoding.  The decode function take
 
 (e/decode ::e/uint16 [14 0 13 0 12 0])
 ;;=>[14 (13 0 12 0)]
+```
+
+Decoding of structs and tuples are done seamlessly through the decode function
+```
+(e/decode ::tup [2 -5 0 100 0 0 0])
+;;=>[[2 -5 100] []]
+
+(e/decode ::tup [2 -5 0 100 0 0 0 8 9 10])
+;;=>[[2 -5 100] [8 9 10]]
+
+(e/decode ::st [12 20 0 -12 -1 -1 -1])
+;;=>[{::foo 12 ::bar 20 ::baz -12} []]
+```
+
+Arrays have some special features, depending on how the array is defined.  If the `:count` is specified in the decleration, then the decoder will be know to decode only `:count` number of elements.  However, if there is no `:count`, then the array is unbounded and it will consume as much binary data as possible 
+
+```
+(e/def ::arr (e/array ::e/uint16))
+;;=>::arr
+
+(e/decode ::arr [1 0 2 0 3 0 4 0 5 0 6 0])
+;;=>[[1 2 3 4 5 6] []]
+
+(e/def ::fixed-arr (e/array ::e/uint16 :count 3)
+;;=>::fixed-arr
+
+(e/decode ::fixed-arr [1 0 2 0 3 0 4 0 5 0 6 0])
+;;=>[[1 2 3] [4 0 5 0 6 0]]
+```
+
+To give some control at runtime to the decoder, there are optional arguments that can be used.  The most common one, is specifying `::e/count`.  This will force an unbounded array to consume only a fixed number of elements
+
+```
+(e/decode ::arr [1 0 2 0 3 0 4 0 5 0 6 0])
+;;=>[[1 2 3 4 5 6] []]
+
+;;By specifying the count, the decoder will only decode 2 elements
+(e/decode ::arr [1 0 2 0 3 0 4 0 5 0 6 0] ::e/count 2)
+;;=>[[1 2] [3 0 4 0 5 0 6 0]]
 ```
 
 ## Advanced Features
