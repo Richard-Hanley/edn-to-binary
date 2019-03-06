@@ -8,7 +8,7 @@ This library is deeply integrated with clojure.spec, and so it require clojure 1
 
 The `encode` function is used to convert a piece of clojure data into a binary collection. `encode` takes two arguments; a special Codec used to specify the type, and the data to be transformed.  Below is an example of the number 125 being encoded as an 8, 16, and 32 bit integer respectively.
 ```
-(require '[clojure.spec.alpha :as s] '[edn-to-binary.core :as e])
+(require '[edn-to-binary.core :as e])
 ;;=>
 
 (e/encode ::e/uint8 125)
@@ -24,7 +24,7 @@ The `encode` function is used to convert a piece of clojure data into a binary c
 Signed integers are also supported 
 
 ```
-(require '[clojure.spec.alpha :as s] '[edn-to-binary.core :as e])
+(require '[edn-to-binary.core :as e])
 ;;=>
 
 (e/encode ::e/int8 -125)
@@ -43,7 +43,7 @@ Signed integers are also supported
 Both 32-bit and 64-bit floating point is also supported
 
 ```
-(require '[clojure.spec.alpha :as s] '[edn-to-binary.core :as e])
+(require '[edn-to-binary.core :as e])
 ;;=>
 
 (e/encode ::e/float 125.895)
@@ -54,6 +54,40 @@ Both 32-bit and 64-bit floating point is also supported
 ```
 
 ## Using Spec to Validate
+
+In the previous section it was shown that each of the primitive types were defined as keywords.  These keywords are also registered as clojure specs.  This means we can validate data to make sure they are a in a reasonable range.  Below is an example of some bounds checking
+
+```
+(require '[clojure.spec.alpha :as s] '[edn-to-binary.core :as e])
+
+(s/valid? ::e/uint8 152)
+;;=>true
+
+;;This call will fail because singed 8-bit values can't be higher than 127
+(s/valid? ::e/int8 152)
+;;=>false
+
+;;Similar checks are done on signedness
+(s/valid? ::e/int16 -257)
+;;=>true
+
+(s/valid? ::e/uint16 -257)
+;;=>false
+
+;;Integral numbers work as floats, but not the other way around
+(s/valid? ::e/float 152)
+;;=>true
+
+(s/valid? ::e/uint32 152.25)
+;;=>false
+
+;;And non-integral types will also fail
+(s/valid? ::e/uint32 "A string")
+;;=>false
+```
+
+
+## Creating Composite Data
 
 ## Usage
 
