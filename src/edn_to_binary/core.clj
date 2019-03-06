@@ -292,6 +292,10 @@
 (edn-to-binary.core/def ::float (primitive Float))
 (edn-to-binary.core/def ::double (primitive Double))
 
+
+;;TODO
+;;Add in string primitives
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;Codec wrappers
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -484,6 +488,10 @@
     nil))
 
 
+;;TODO
+;;The implicit decoder form effectively swallows the unqualified form
+;;This means that all call for unqualified fields need to be wrapped in
+;;an implicit decoder, which is clunky and not ideal
 (defmacro struct 
   "Takes a list of registered spec/codecs and creates a map spec/codec.
 
@@ -538,8 +546,17 @@
 
 
 
+;;TODO
+;;Add in union support to the new Codec protocol
 (defmacro union [& key-codec-forms])
 
+
+;;TODO
+;;Add in support for multi-codec (an extension of multi-spec using multimethods)
+
+
+;;TODO
+;;Add in support for spec sequence macros and regexes
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Common specs that can be used in codec definitions

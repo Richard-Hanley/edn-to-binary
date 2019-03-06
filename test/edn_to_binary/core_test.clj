@@ -335,30 +335,36 @@
 (e/def ::bCount ::e/uint8)
 (e/def ::arrData (e/array (e/tuple ::e/int8 ::e/uint16)))
 (e/def ::simple-struct (e/struct ::bLength
-                                 ::bCount
+                                 (e/implicit-decoder 
+                                   (fn [_ args]
+                                     args)
+                                   (e/unqualified ::bCount))
                                  ::arrData))
 
 (e/def ::dep-struct (e/and (e/struct ::bLength
-                                     ::bCount
+                                     (e/implicit-decoder 
+                                       (fn [_ args]
+                                         args)
+                                       (e/unqualified ::bCount))
                                      (e/implicit-decoder 
                                        (fn [data _]
-                                         {::e/count (::bCount data)})
+                                         {::e/count (:bCount data)})
                                        ::arrData))
                            (e/dependent-field ::bLength #(e/sizeof (e/encode ::dep-struct %)))
-                           (e/dependent-field ::bCount #(count (::arrData %)))))
+                           (e/dependent-field :bCount #(count (::arrData %)))))
 
 (testing "struct codecs"
   (testing "simple conformance"
-    (is (= {::bLength 8 ::bCount 2 ::arrData [[-1 2] [3 257]]}
-           (s/conform ::simple-struct {::bLength 8 ::bCount 2 ::arrData [[-1 2] [3 257]]}))))
+    (is (= {::bLength 8 :bCount 2 ::arrData [[-1 2] [3 257]]}
+           (s/conform ::simple-struct {::bLength 8 :bCount 2 ::arrData [[-1 2] [3 257]]}))))
   (testing "dependent conformance"
-    (is (= {::bLength 8 ::bCount 2 ::arrData [[-1 2] [3 257]]}
-           (s/conform ::dep-struct {::bLength 0 ::bCount 0 ::arrData [[-1 2] [3 257]]}))))
+    (is (= {::bLength 8 :bCount 2 ::arrData [[-1 2] [3 257]]}
+           (s/conform ::dep-struct {::bLength 0 :bCount 0 ::arrData [[-1 2] [3 257]]}))))
   (testing "encoding"
     (is (= [8 2 -1 2 0 3 1 1]
-           (e/flatten (e/encode ::dep-struct {::bLength 8 ::bCount 2 ::arrData [[-1 2] [3 257]]})))))
+           (e/flatten (e/encode ::dep-struct {::bLength 8 :bCount 2 ::arrData [[-1 2] [3 257]]})))))
   (testing "decoding"
-    (is (= {::bLength 8 ::bCount 2 ::arrData [[-1 2] [3 257]]}
+    (is (= {::bLength 8 :bCount 2 ::arrData [[-1 2] [3 257]]}
            (first (e/decode ::dep-struct [8 2 -1 2 0 3 1 1 0 0 0 0 0]))))
     (is (= [0 0 0 0 0]
            (second (e/decode ::dep-struct [8 2 -1 2 0 3 1 1 0 0 0 0 0]))))))
