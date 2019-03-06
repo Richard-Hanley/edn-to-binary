@@ -87,7 +87,7 @@ In the previous section it was shown that each of the primitive types were defin
 ```
 
 ### Custom Specs and Types
-These are fully featured specs, which support functions such as `s/conform` and `s/explain`.  This library also provides a wrapper over `s/def` and `s/and` that enables the creation of custom types and custom validators.
+These codecs are fully featured specs, which support functions such as `s/conform` and `s/explain`.  This library also provides a wrapper over `s/def` and `s/and` that enables the creation of custom types and custom validators.
 
 ```
 (e/def ::foo (e/and ::e/uint16
@@ -208,11 +208,38 @@ A tuple is a fixed length vector with each element being a fixed (usually differ
 
 ### Structs
 
-### Custom Alignments
+Structs are ordered maps.  The `e/struct` macro wraps `s/keys` while maintaining the proper order when encoding.  When a struct is enocded the result is a map of binary collections.  `e/flatten` will respect both the alignment and key order of the binary collection maps.
 
-### Adding Data Dependencies
+*An important note about spec.* One of the design decisions of spec is that `s/keys` would only be used to specify existence.  This means that each filed must be seperately defined before creating the struct. 
+
+```
+(e/def ::foo ::e/uint8)
+(e/def ::bar ::e/uint16)
+(e/def ::baz ::e/int32)
+
+(e/def ::st (e/struct ::foo
+                      ::bar
+                      :baz))
+;;=>::st
+
+;;Each field is validated through spec
+(e/valid? ::st {::foo 12 ::bar 20 ::baz -12}
+;;=>true
+
+;;In this case ::bar should not be negative
+(e/valid? ::st {::foo 12 ::bar -20 ::baz -12}
+;;=>false
+
+(e/encode ::st {::foo 12 ::bar 20 ::baz -12}))
+;;=>{::foo (12) ::bar (20 0) ::baz (-12 -1 -1 -1)}
+
+(e/flatten (e/encode ::st {::foo 12 ::bar 20 ::baz -12}))
+;;=>{12 20 0 -12 -1 -1 -1)
+```
 
 ## Decoding
+
+## Advanced Features
 
 ## TODO
 
