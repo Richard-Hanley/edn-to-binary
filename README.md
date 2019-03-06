@@ -2,7 +2,13 @@
 
 In my experience converting human readable data to an arbitrary binary format is a difficult task to do cleanly.  This library is intended to help support declaratively defining ad-hoc binary formats, and giving the developer tools for serializing and deserializing. This library is a work in progress, so let me know if you have any feature requests or API comments.
 
-This library is deeply integrated with clojure.spec, and so it requires clojure 1.9.0 or higher.  
+This library is deeply integrated with clojure.spec, and so it requires clojure 1.9.0 or higher.
+
+## Overview
+
+This library provides a series of primitives that can be encoded, and decoded freely.  It also gives the programmer a number of ways to create composites from arrays, tuples, and maps.  The key feature of this library is that it leverages clojure.spec very heavily.  All primitives and composite types will have fully featured specs that can be used for data validation and conformance.  By using spec conformers, it becomes possible to encode arbitrary data dependencies into the resulting data.
+
+This library also gives some limited support to managing data dependices when decoding binary data.
 
 ## Encoding
 
