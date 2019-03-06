@@ -12,13 +12,13 @@ The `encode` function is used to convert a piece of clojure data into a binary c
 ;;=>
 
 (e/encode ::e/uint8 125)
-;;=>[0x7D]
+;;=>[125]
 
 (e/encode ::e/uint16 125)
-;;=>[0x7D 0x00]
+;;=>[125 0]
 
 (e/encode ::e/uint32 125)
-;;=>[0x7D 0x00 0x00 0x00]
+;;=>[125 0 0 0]
 ```
 
 Signed integers are also supported 
@@ -28,29 +28,32 @@ Signed integers are also supported
 ;;=>
 
 (e/encode ::e/int8 -125)
-;;=>[0x83]
+;;=>[-125]
 
 (e/encode ::e/int16 -125)
-;;=>[0x83 0xff 0xff]
+;;=>[-125 -1 -1]
 
 (e/encode ::e/int32 -125)
-;;=>[0x83 0xff 0xff 0xff]
+;;=>[125 -1 -1 -1]
 
 (e/encode ::e/int32 -125)
-;;=>[0x83 0xff 0xff 0xff 0xff 0xff 0xff 0xff]
+;;=>[-125 -1 -1 -1 -1 -1 -1 -1]
 ```
 
+Both 32-bit and 64-bit floating point is also supported
 
+```
+(require '[clojure.spec.alpha :as s] '[edn-to-binary.core :as e])
+;;=>
 
-### Primitive Types
-There are seven primitive types supported at the moment
+(e/encode ::e/float 125.895)
+;;=>[61 -54 -5 66]
 
-| keyword        | Java Type           | Cool  |
-| ------------- |:-------------:| -----:|
-| col 3 is      | right-aligned | $1600 |
-| col 2 is      | centered      |   $12 |
-| zebra stripes | are neat      |    $1 |
+(e/encode ::e/double 125.895)
+;;=>[-31 122 20 -82 71 121 95 64]
+```
 
+## Using Spec to Validate
 
 ## Usage
 
