@@ -452,6 +452,38 @@
 
 
 
+(defn struct-impl [key-codec-pairs implicit-decoders]
+  (let [key-order (map first key-codec-pairs)
+        codecs (map second key-codec-pairs)
+        ordered-values (fn [coll]
+                        (map #(get coll %) key-order))]
+    (reify Codec
+      (alignment* [this] (apply max (map raw-alignment codecs)))
+      (encode* [this data] (make-binary (zipmap key-order
+                                                (map raw-encode codecs (ordered-values data)))
+                                        :align (alignment* this)
+                                        :order key-order))
+      (decode* [this bin decoding-args] 
+        (let [child-args (or (::child-args decoding-args) (constantly nil))]
+          (reduce (fn [[data-accum current-rem] [k codec]]
+                    (let [implicit-fn (get implicit-decoders k (constantly nil))
+                          args (merge 
+                                 (child-args decoding-args k)
+                                 (implicit-fn data-accum decoding-args))
+                          [new-data bin-rem] (raw-decode codec current-rem args)]
+                      [(assoc data-accum k new-data)
+                       bin-rem]))
+                  [{} bin]
+                  (map vector key-order codecs)))))))
+
+(def unqualified (constantly nil))
+
+(defn unqualified? [maybe-sym]
+  (if (symbol? maybe-sym) 
+    (= #'unqualified (resolve maybe-sym))
+    nil))
+
+
 (defmacro struct 
   "Takes a list of registered spec/codecs and creates a map spec/codec.
 
@@ -477,7 +509,34 @@
   structs can also use implicit-decoders
   "
   [& registered-codecs]
-  )
+  (let [[implicit-decoders specs] (reduce 
+                                    (fn [[de sp] sc]
+                                      (if (seq? sc)
+                                        (let [[sym decoder key] sc]
+                                          (if (implicit-decoder? sym)
+                                            [(assoc de key decoder) (conj sp key)]
+                                            (throw (IllegalArgumentException. "Only implicit decoders may be called from struct field"))))
+                                        [de (conj sp sc)]))
+                                    [{} []]
+                                    registered-codecs)
+        unk #(-> % name keyword)
+        qualified-order (fn [k] [k k])
+        unqualified-order (fn [k] [(unk k) k])
+        [req req-un order] (reduce (fn [[req req-un order] f]
+                                     (cond 
+                                       (keyword? f) [(conj req f) req-un (conj order (qualified-order f))]
+                                       (and (seq? f)
+                                            (unqualified? (first f))) [req (conj req-un (second f)) (conj order (unqualified-order (second f)))]
+                                       :else (throw (ex-info "Struct field is not qualified keyword or unqualified sequence"
+                                                             {:field f}))))
+
+
+                                   [[] [] []]
+                                   specs)]
+    `(with-meta (s/keys :req [~@req] :req-un [~@req-un])
+                {::codec (struct-impl [~@order] ~implicit-decoders)})))
+
+
 
 (defmacro union [& key-codec-forms])
 
