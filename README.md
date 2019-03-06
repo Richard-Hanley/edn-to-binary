@@ -290,6 +290,68 @@ To give some control at runtime to the decoder, there are optional arguments tha
 
 ## Advanced Features
 
+There are some advanced features to manage special encoding and decoding data
+
+### Custom Alignment
+
+Besides allowing for primitives to be redefined with new alignments, there is a special `e/align` macro that will force a codec to have a particular alignment.  The `e/flatten` function will always respect these alignments
+
+```
+(e/def ::aligned-tup ::e/uint8
+                     ::e/uint16
+                     (e/align ::e/uint32 8))
+
+;; The return value from e/encode looks identical to the non-aligned version of this tuple
+(e/encode ::aligned-tup [1 2 4])
+;;=>[(1) (2 0) (4 0 0 0)]
+
+;; The flattened version has padding added in to handle the 8 byte alignment of element 2
+(e/faltten (e/encode ::aligned-tup [1 2 4]))
+;;=>(1 2 0 0 0 0 0 0 4 0 0 0)
+```
+
+### Data Dependencies
+
+One of the super powers of this library comes from the deep leverage of spec.  Because of this, you can create some powerful dependencies in your data, and have `s/conform` manage them.  There are some helper function for this.  For example, the `dependent-field` function creates a special conformer that can be used to specify a fields relation to another.
+
+The prototypical example of this is a struct with the first element being the number of elements in the second field. The dependent field function takes a key or index, a function that takes the conformed data, and returns the new value of the passed key or index
+
+```
+(e/def ::data-count ::e/uint8)
+(e/def ::data (e/array ::e/uint16))
+
+(e/def ::tagged-array (e/and (e/struct ::data-count
+                                       ::data)
+                             (e/dependent-field ::data-count #(count (::data %)))))
+
+;; The value of ::data-count will now be conformed to the length of ::data
+(s/conform ::tagged-array {::data-count 0 ::data [1 2 3 4]})
+;;=>{::data-count 4 ::data [1 2 3 4]}
+```
+
+### Implicit Decoders
+
+Managing data depenencies is extremely powerful when encoding data, but it really can't do anything on the decoding side.  This is because we can't leverage any of spec's validators and conformers.  So to handle this in decoding, we need to be able to give the decoder some hints.
+
+These hints are given through a special argument to the tuple and struct macros called `e/implicit-decoder`
+
+An implict decoder takes a function of `(fn [data-so-far decoding-args] ....)` and returns the decoding args for that particular field.
+
+```
+
+(e/def ::data-count ::e/uint8)
+(e/def ::data (e/array ::e/uint16))
+
+(e/def ::tagged-array (e/and (e/struct ::data-count
+                                       (e/implicit-decoder (fn [data _]
+                                                              {::e/count (::data-count data})
+                                                           ::data))
+                             (e/dependent-field ::data-count #(count (::data %)))))
+                             
+;;The implicit decoder will now notice that the first byte is 2, and so it will only decode 2 elements in the array
+(e/decode ::tagged-array [2 1 0 2 0 3 0 4 0 5 0])
+;;=>[{::data-count 2 ::data [1 2]} [3 0 4 0 5 0]]
+```
 ## TODO
 
 Support for a string primitive needs to be added.  A string would have to support multiple encodings and word sizes
