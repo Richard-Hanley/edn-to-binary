@@ -239,6 +239,16 @@ Structs are ordered maps.  The `e/struct` macro wraps `s/keys` while maintaining
 
 ## Decoding
 
+Decoding is done through a similar method as encoding.  The decode function takes a codec, binary sequence, and some optional arguments.  It returns a tuple of decoded data and remaining bytes. The return value is very similar to the return of `split` or `split-with`.  This gives the programmer the ability to chain multiple decoding calls if desired.
+
+```
+(e/decode ::e/uint16 [14 0])
+;;=>[14 ()]
+
+(e/decode ::e/uint16 [14 0 13 0 12 0])
+;;=>[14 (13 0 12 0)]
+```
+
 ## Advanced Features
 
 ## TODO
