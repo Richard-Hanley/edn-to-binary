@@ -304,3 +304,29 @@
         (let [[data rem] (e/decode arr-bd [1 0 2 0 3 0 4 0] ::e/count 3)]
           (is (= [1 2 3] data))
           (is (= [4 0] rem)))))))
+
+(testing "tuple codecs"
+  (testing "conformance"
+    (is (= [5 -1] (s/conform (e/tuple ::e/uint8 ::e/int16) [5 -1])))
+    (is (= (s/invalid? (s/conform (e/tuple ::e/uint8 ::e/int16) [257 -1]))))
+    (is (= (s/invalid? (s/conform (e/tuple ::e/uint8 ::e/int16) [5 0x10000])))))
+  (let [simple-tup (e/tuple ::e/uint8 ::e/uint32 ::e/uint16)]
+    (testing "encoding"
+      (is (= [1 2 0 0 0 3 0] (e/flatten (e/encode simple-tup [1 2 3])))))
+    (testing "decoding"
+      (is (= [1 2 3] (first (e/decode simple-tup [1 2 0 0 0 3 0]))))))
+  (testing "dependent tuple"
+    (let [dep-tup (e/and (e/tuple ::e/uint8 (e/implicit-decoder
+                                              (fn [data _]
+                                                  {::e/count (first data)})
+                                       (e/array ::e/uint16)))
+                         (e/dependent-field 0 #(count (second %))))]
+      (testing "conformance"
+        (is (= [0 []] (s/conform dep-tup [0 []])))
+        (is (= [2 [5 6]] (s/conform dep-tup [0 [5 6]])))
+        (is (= [3 [5 6 7]] (s/conform dep-tup [0 [5 6 7]]))))
+      (testing "encoding"
+        (is (= [2 5 0 6 0] (e/flatten (e/encode dep-tup [2 [5 6]])))))
+      (testing "decoding"
+        (is (= [2 [5 6]] (first (e/decode dep-tup [2 5 0 6 0 7 0 8 0]))))
+        (is (= [7 0 8 0] (second (e/decode dep-tup [2 5 0 6 0 7 0 8 0]))))))))

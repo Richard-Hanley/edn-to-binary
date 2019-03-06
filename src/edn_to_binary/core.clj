@@ -402,6 +402,30 @@
                 {::codec ~codec-imp})))
 
 
+(defn tuple-impl [codecs implicit-decoders]
+  (reify Codec
+    (alignment* [_] (apply max (map raw-alignment codecs)))
+    (encode* [this data] (make-binary (map raw-encode codecs data)
+                                   :align (raw-alignment this)))
+    (decode* [this bin decoding-args] 
+      (let [child-args (or (::child-args decoding-args) (constantly nil))]
+        (reduce (fn [[data-accum current-rem] [i codec]]
+                  (let [implicit-fn (get implicit-decoders i (constantly nil))
+                        args (merge 
+                               (child-args decoding-args i)
+                               (implicit-fn data-accum decoding-args))
+                        [new-data bin-rem] (raw-decode codec current-rem args)]
+                    [(conj data-accum new-data)
+                     bin-rem]))
+                [[] bin]
+                (map-indexed vector codecs))))))
+
+(def implicit-decoder (constantly nil))
+
+(defn implicit-decoder? [maybe-sym]
+  (if (symbol? maybe-sym) 
+    (= #'implicit-decoder (resolve maybe-sym))
+    nil))
 
 (defmacro tuple 
   "Takes one or more specified codecs and returns a tuple spec/codec.
@@ -414,7 +438,19 @@
     codec)
   "
   [& specified-codecs]
-  )
+  (let [[implicit-decoders specs] (reduce 
+                                    (fn [[de sp] [i sc]]
+                                      (if (seq? sc)
+                                        (if (implicit-decoder? (first sc))
+                                          [(assoc de i (nth sc 1)) (conj sp (nth sc 2))]
+                                          [de (conj sp sc)])
+                                        [de (conj sp sc)]))
+                                    [{} []]
+                                    (map-indexed vector specified-codecs))]
+  `(with-meta (s/tuple ~@specs)
+              {::codec (tuple-impl (mapv extract-codec [~@specs]) ~implicit-decoders)})))
+
+
 
 (defmacro struct 
   "Takes a list of registered spec/codecs and creates a map spec/codec.
