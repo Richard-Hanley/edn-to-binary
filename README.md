@@ -6,9 +6,13 @@ This library is deeply integrated with clojure.spec, and so it requires clojure 
 
 ## Overview
 
-This library provides a series of primitives that can be encoded, and decoded freely.  It also gives the programmer a number of ways to create composites from arrays, tuples, and maps.  The key feature of this library is that it leverages clojure.spec very heavily.  All primitives and composite types will have fully featured specs that can be used for data validation and conformance.  By using spec conformers, it becomes possible to encode arbitrary data dependencies into the resulting data.
+This library provides a series of primitives that can be encoded, and decoded freely.  It also gives the programmer a number of ways to create composites from arrays, tuples, and maps.  
 
-This library also gives some limited support to managing data dependices when decoding binary data.  The rest of this README documents the usage of this library.  For a more detailed look at the internals, please look at the [Design Walkthrough](https://github.com/Richard-Hanley/edn-to-binary/blob/master/Design_Walkthrough.md)
+One of big advantages of this library is that it leverages clojure.spec very heavily.  All primitives and composite types will have fully featured specs that can be used for data validation and conformance.  By using spec conformers, it becomes possible to encode arbitrary data dependencies into the resulting data.  The hope is that by using spec, this library can be both a rich serialization and data validation tool.
+
+This library also gives some limited support to managing data dependices when decoding binary data.  See the Advanced Features section for information on how to use them.
+
+The rest of this README documents the usage of this library.  For a more detailed look at the internals, please look at the [Design Walkthrough](https://github.com/Richard-Hanley/edn-to-binary/blob/master/Design_Walkthrough.md)
 
 ## Encoding
 
