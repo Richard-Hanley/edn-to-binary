@@ -225,6 +225,11 @@
 
 
 (defmacro signed-primitive-spec [class]
+  `#(and (int? %1)
+         (or (zero? %1)
+             (<= (. ~class MIN_VALUE) %1 (. ~class MAX_VALUE)))))
+
+(defmacro floating-primitive-spec [class]
   `#(or (zero? %1)
         (<= (. ~class MIN_VALUE) %1 (. ~class MAX_VALUE))))
 
@@ -270,6 +275,16 @@
   `(with-meta (signed-primitive-spec ~prim)
               {::codec (merge ~c ~enc)})))
 
+(defmacro floating-primitive [prim & encoding]
+  (let [c `(get primitive-codecs ~prim)
+        enc `(if (s/valid? (s/keys*) [~@encoding])
+               (s/conform (s/keys*) [~@encoding])
+               (throw (ex-info "Unable to conform encoding" (s/explain-data (s/keys*) [~@encoding]))))]
+  `(with-meta (floating-primitive-spec ~prim)
+              {::codec (merge ~c ~enc)})))
+
+
+
 (defmacro unsigned-primitive [prim & encoding]
   (let [coerce-unsigned `#(. ~prim (toUnsignedLong %))
         c `(assoc (get primitive-codecs ~prim) :coerce-from ~coerce-unsigned)
@@ -289,8 +304,8 @@
 (edn-to-binary.core/def ::uint16 (unsigned-primitive Short))
 (edn-to-binary.core/def ::uint32 (unsigned-primitive Integer))
 
-(edn-to-binary.core/def ::float (primitive Float))
-(edn-to-binary.core/def ::double (primitive Double))
+(edn-to-binary.core/def ::float (floating-primitive Float))
+(edn-to-binary.core/def ::double (floating-primitive Double))
 
 
 ;;TODO

@@ -13,8 +13,8 @@
 (e/def :little/uint8 (e/unsigned-primitive Byte))
 (e/def :little/uint16 (e/unsigned-primitive Short))
 (e/def :little/uint32 (e/unsigned-primitive Integer))
-(e/def :little/float (e/primitive Float))
-(e/def :little/double (e/primitive Double))
+(e/def :little/float (e/floating-primitive Float))
+(e/def :little/double (e/floating-primitive Double))
 
 (e/def :big/int8 (e/primitive Byte ::e/order :big))
 (e/def :big/int16 (e/primitive Short ::e/order :big))
@@ -23,8 +23,8 @@
 (e/def :big/uint8 (e/unsigned-primitive Byte ::e/order :big))
 (e/def :big/uint16 (e/unsigned-primitive Short ::e/order :big))
 (e/def :big/uint32 (e/unsigned-primitive Integer ::e/order :big))
-(e/def :big/float (e/primitive Float ::e/order :big))
-(e/def :big/double (e/primitive Double ::e/order :big))
+(e/def :big/float (e/floating-primitive Float ::e/order :big))
+(e/def :big/double (e/floating-primitive Double ::e/order :big))
 
 (e/def :aligned/int8 (e/primitive Byte ::e/word-size 4))
 (e/def :aligned/int16 (e/primitive Short ::e/word-size 4))
@@ -33,8 +33,8 @@
 (e/def :aligned/uint8 (e/unsigned-primitive Byte ::e/word-size 4))
 (e/def :aligned/uint16 (e/unsigned-primitive Short ::e/word-size 4))
 (e/def :aligned/uint32 (e/unsigned-primitive Integer ::e/word-size 4))
-(e/def :aligned/float (e/primitive Float ::e/word-size 4))
-(e/def :aligned/double (e/primitive Double ::e/word-size 4))
+(e/def :aligned/float (e/floating-primitive Float ::e/word-size 4))
+(e/def :aligned/double (e/floating-primitive Double ::e/word-size 4))
 
 (e/def :aligned-wide/int8 (e/primitive Byte ::e/word-size 8))
 (e/def :aligned-wide/int16 (e/primitive Short ::e/word-size 8))
@@ -43,8 +43,8 @@
 (e/def :aligned-wide/uint8 (e/unsigned-primitive Byte ::e/word-size 8))
 (e/def :aligned-wide/uint16 (e/unsigned-primitive Short ::e/word-size 8))
 (e/def :aligned-wide/uint32 (e/unsigned-primitive Integer ::e/word-size 8))
-(e/def :aligned-wide/float (e/primitive Float ::e/word-size 8))
-(e/def :aligned-wide/double (e/primitive Double ::e/word-size 8))
+(e/def :aligned-wide/float (e/floating-primitive Float ::e/word-size 8))
+(e/def :aligned-wide/double (e/floating-primitive Double ::e/word-size 8))
 
 
 
@@ -80,7 +80,12 @@
       (testing "beyond max value"
         (is (s/invalid? (s/conform :little/int8 (dec Byte/MIN_VALUE))))
         (is (s/invalid? (s/conform :little/int16 (dec Short/MIN_VALUE))))
-        (is (s/invalid? (s/conform :little/int32 (dec Integer/MIN_VALUE)))))))
+        (is (s/invalid? (s/conform :little/int32 (dec Integer/MIN_VALUE))))))
+    (testing "type checking"
+      (is (s/invalid? (s/conform :little/int8 1.02)))
+      (is (s/invalid? (s/conform :little/int16 1.02)))
+      (is (s/invalid? (s/conform :little/int32 1.02)))
+      (is (s/invalid? (s/conform :little/int64 1.02)))))
   (testing "unsigned"
     (testing "zero checking"
       (is (= 0 (s/conform :little/uint8 0)))
@@ -98,7 +103,12 @@
     (testing "negative values"
       (is (s/invalid? (s/conform :little/uint8 -1)))
       (is (s/invalid? (s/conform :little/uint16 -1)))
-      (is (s/invalid? (s/conform :little/uint32 -1))))))
+      (is (s/invalid? (s/conform :little/uint32 -1))))
+    (testing "type checking"
+      (is (s/invalid? (s/conform :little/int8 1.02)))
+      (is (s/invalid? (s/conform :little/int16 1.02)))
+      (is (s/invalid? (s/conform :little/int32 1.02)))
+      (is (s/invalid? (s/conform :little/int64 1.02))))))
 
 (testing "primitive codec alignment"
   (testing "codec alignment"
