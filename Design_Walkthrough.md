@@ -297,6 +297,35 @@ With this we now have primitives fully functioning.  They are registered as keyw
 
 __WARNING: Dark Magic Ahead__
 
+No seriously, things are about to get a little spooky.  Spec implements some very powerful macros to conform collections, tuples, and maps.  The goal is to create special codec macros `array`, `tuple`, and `struct` that wrap the spec macros.  It's a well known fact that Lisp macros can be difficult to write and debug.  However, that is nothing compared to Lisp macros that are trying to manipulate other Lisp macros.
 
+To make things even more complicated, I wanted to be able to be able to provide runtime hints to the decoder.  One of the more common occurences in binary formats is to have a tagged array.  In these situations a custom parser would read the first token to get the array length, and then in a loop read the array.  I wanted to be able to specify this in a declaritive fashion.  This means that the composite macros must do some transformation on their input.
+
+The code in this section is very dense. If you've made it this far into the documentation, then I'm going to assume you have some understanding of how Clojure macros are evaluated.  I welcome any comments or suggestions you may have to make these more hygenic.
+
+### Arrays
+
+Let's first start with the codec implementation.  There is a `array-impl` function which will reify a Codec 
+
+```
+(defn array-impl 
+  ([codec]
+   (reify Codec
+     (alignment* [_] ....)
+     (encode* [this data] ...)
+     (decode* [this bin decoding-args] ....))))
+```
+
+The alignment and encoding unction is fairly trivial
+
+```
+(alignment* [_] (raw-alignment codec))
+(encode* [this data] (make-binary (mapv (partial raw-encode codec) data)
+                                   :align (alignment* this)))
+```
+
+You may notice that there are calls to `raw-alignment` and `raw-encode`.  These functions will resolve the codec if it is a registered keyword, or call `alignment*` and `encode*` directly if the codec is a raw Codec object.
+
+The decode function is where things get a little 
 
 ## The BinaryCollection Protocol
