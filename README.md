@@ -124,8 +124,8 @@ By default all primitive types are encoded as little endian, and have alignment 
 (e/def :big/uint8 (e/unsigned-primitive Byte ::e/order :big))
 (e/def :big/uint16 (e/unsigned-primitive Short ::e/order :big))
 (e/def :big/uint32 (e/unsigned-primitive Integer ::e/order :big))
-(e/def :big/float (e/primitive Float ::e/order :big))
-(e/def :big/double (e/primitive Double ::e/order :big))
+(e/def :big/float (e/floating-primitive Float ::e/order :big))
+(e/def :big/double (e/floating-primitive Double ::e/order :big))
 
 ;;Registering new types with a word size of 8 bytes
 (e/def :aligned/int8 (e/primitive Byte ::e/word-size 8))
@@ -135,8 +135,8 @@ By default all primitive types are encoded as little endian, and have alignment 
 (e/def :aligned/uint8 (e/unsigned-primitive Byte ::e/word-size 8))
 (e/def :aligned/uint16 (e/unsigned-primitive Short ::e/word-size 8))
 (e/def :aligned/uint32 (e/unsigned-primitive Integer ::e/word-size 8))
-(e/def :aligned/float (e/primitive Float ::e/word-size 8))
-(e/def :aligned/double (e/primitive Double ::e/word-size 8)
+(e/def :aligned/float (e/floating-primitive Float ::e/word-size 8))
+(e/def :aligned/double (e/floating-primitive Double ::e/word-size 8)
 ```
 
 It is important to note that the alignment of a particular type is the minimum of it's size in bytes and the word-size.  A uint32 would be 4 byte aligned if the word-size was either 4 or 8 bytes. 
