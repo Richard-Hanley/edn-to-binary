@@ -204,10 +204,9 @@ Since records are just maps, there are some keys that are used to configure the 
 - __Required__ `:get-buffer` A function that takes a java.nio.ByteBuffer and returns the primtive value
 - __Required__ `:put-buffer` A 2-airity function that takes a java.nio.ByteBuffer, a primitive data, and puts the primitive into the buffer
 - __Required__ `:coerce-from` A function that can modify a primitive value before being returned by `decode`.  For most primitives this is `identity`, but unsigned values should call `Long/toUnsignedLong` to make the return values more human readable
-- __Optional__ `::e/word-size` 
-- __Optional__ `::e/force-alignment`
-- __Optional__ `::e/order`
-
+- __Optional__ `::e/word-size` The alignment of a primitive is the minimum value of word size and primitive size.
+- __Optional__ `::e/force-alignment` The alignment can be forced to a specific value, which overrules the word-size argument.
+- __Optional__ `::e/order` The byte order of the primitive can be `:little` `:big` `:native` and `:network`
 
 Once these config functions are passed, the record can then implement the Codec protocol.
 
@@ -235,6 +234,14 @@ Once these config functions are passed, the record can then implement the Codec 
                        remaining)])))
 ```
 
+Alignment simply checks if the `::force-alignment` or `::word-size` key is set.  
+
+Encoding first allocates a java.nio.ByteBuffer with the appropriate size and byte order.  The data is then encoded into the ByteBuffer, which is then returned as a BinaryCollection by making a call to `make-binary`.  The usage of a BinaryCollection is explained later, for now you can just treat the result as a seq with some metadata.
+
+Decoding works by first splitting the passed binary up into a prim section and a remaining section.  This works because primitives are all fixed size. The prim section is then converted to a byte array and wrapped as a ByteBuffer.  Once the data has been read from the 
+ByteBuffer it is corerced into a human readable number.
+
+One of the downsides to this implementation is that primitives need to be individually allocated when encoding and decoding. This does affect performance. So far the performance cost has been worth the development cost of using Clojure sequences.
 
 ### Combining Spec and Codec
 
