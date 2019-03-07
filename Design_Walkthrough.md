@@ -154,11 +154,89 @@ At this point we have a complete mechanism to integrating instances of the Codec
 
 ## Defining Primitives
 
-The primitive codecs and specs are relatively straightfoward.  However, to reduce the amount of boilerplate and there are a few macros that make it pretty easy to create new primitives.
+The primitive codecs and specs are relatively straightfoward.  However, to reduce the amount of boilerplate and there are a few macros that make it pretty easy to create new primitives.  In order to create a primitive, you need to create a spec, and then create an implementation of a codec.  Fortunately there are some macros that can help.
 
 ### Specifying Primitives
 
-A primitive is considered valid so long as it is a valid numerical type and within a valid range.
+A primitive is considered valid so long as it is a valid numerical type, the value is within a valid range, and unsigned numbers are not negative
+
+#### Unsigned Spec
+
+```
+(defmacro unsigned-primitive-spec [class]
+  `(s/int-in 0 (bit-shift-left 1 (. ~class SIZE))))
+```
+
+The valid range of an unsigned type of bit n is `[0, 2^n)`.  Fortunately spec provides a built-in `s/int-in` which does this check for us.  Since this is a macro, we can extract the bit size directly from the Java class definition.
+
+#### Signed Spec
+
+```
+(defmacro signed-primitive-spec [class]
+  `#(and (int? %1)
+         (or (zero? %1)
+             (<= (. ~class MIN_VALUE) %1 (. ~class MAX_VALUE)))))
+```
+
+The valid range for a signed type of bit n is `[-2^(n-1), 2^(n-1))`.  This spec is a simple predicate that makes sure the input is a integral value and is between these ranges
+
+#### Floating Spec
+
+```
+(defmacro floating-primitive-spec [class]
+  `#(or (zero? %1)
+        (<= (. ~class MIN_VALUE) %1 (. ~class MAX_VALUE))))
+```
+
+A floating point check works exactly like the signed spec, only it doesn't need to check if the input is integral.
+
+### The Primitive Record
+
+To implement the Codec protocol for primtives a special PrimitiveCodec record was created.  The primitive Codec has four fields as shown in this decleration:
+
+```
+(defrecord PrimitiveCodec [size get-buffer put-buffer coerce-from])
+```
+
+Since records are just maps, there are some keys that are used to configure the record.
+
+- __Required__ `:size` The size in bytes of this primitive. Primitives are assumed to have a fixed size
+- __Required__ `:get-buffer` A function that takes a java.nio.ByteBuffer and returns the primtive value
+- __Required__ `:put-buffer` A 2-airity function that takes a java.nio.ByteBuffer, a primitive data, and puts the primitive into the buffer
+- __Required__ `:coerce-from` A function that can modify a primitive value before being returned by `decode`.  For most primitives this is `identity`, but unsigned values should call `Long/toUnsignedLong` to make the return values more human readable
+- __Optional__ `::e/word-size` 
+- __Optional__ `::e/force-alignment`
+- __Optional__ `::e/order`
+
+
+Once these config functions are passed, the record can then implement the Codec protocol.
+
+```
+(defrecord PrimitiveCodec [size get-buffer put-buffer coerce-from]
+  Codec
+  (alignment* [this]
+    (let [{:keys [::force-alignment ::word-size] 
+           :or {force-alignment nil word-size 1}} this]
+      (or force-alignment
+          (min size word-size))))
+  (encode* [this data]
+    (let [buff (.order (ByteBuffer/allocate size)
+                       (get order-map (::order this) default-order))
+          _ (put-buffer buff (or data 0))]
+      (make-binary (seq (.array buff))
+                   :align (alignment* this))))
+  (decode* [this bin _] 
+    (let [[prim remaining] (split-at size bin)
+          bytes (.order (ByteBuffer/wrap (byte-array prim))
+                         (get order-map (::order this)))
+          data (coerce-from (get-buffer bytes))]
+      [data
+       (indexed-binary (+ size (current-index bin))
+                       remaining)])))
+```
+
+
+### Combining Spec and Codec
 
 ## Composite Macros and Implicit Decoders
 
