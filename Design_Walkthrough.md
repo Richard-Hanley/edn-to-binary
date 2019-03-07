@@ -48,6 +48,85 @@ However, this is a task that is easier said than done. Spec goes out of it's way
 
 #### Recreating the Registry
 
+Spec provides a global registry that can be used to register a given spec with a namespace qualified keyword.  At first glance this seem to be fairly small feature, but it ends up being used extensively (in particular when trying to conform maps).  If all codecs can be registered in the same way that specs are, then a programmer can use keywords as a way to symbolically referenece the two without needing any particular code sharing between the libraries.
+
+To accomplish this, the registry needed to be re-implemented.  The followed functions were taken and modified from the Spec source code
+
+```
+(defonce ^:private registry-ref (atom {}))
+
+(defn registry
+  "returns the registry map, prefer 'get-codec' to lookup a codec by name"
+  []
+  @registry-ref)
+
+(defn get-codec
+  "Returns the codec registered with the fully qualified keyword"
+  [k] (get @registry-ref k))
+
+(defn register-codec [k c]
+  (swap! registry-ref assoc k c))
+  
+(defn reg-resolve
+  "returns the codec end of alias chain starting with k, nil if not found, k if k not Named"
+  [k]
+  (if (named? k)
+    (let [reg @registry-ref]
+      (loop [codec k]
+        (if (named? codec)
+          (recur (get reg codec))
+          (when codec
+            (with-name codec k)))))
+    k))
+```
+
+The registry is a private atom.  There are two accessor functions `get-codec` and `registry` that can be used to get values from the registry at a particular time.  New codecs can be added using the `register-codec`.  Finally, the `reg-resolve` function is used to follow a registered chain.  Consider a case where `::foo` is registered as `::bar`, which is then registered as `::baz`.  The `reg-resolve` function would be able to follow the chain, and eventually return the codec mapped by `::baz`
+
+#### Implementing the Core Functions
+
+Now that we have these core registry functions, we can take a look at the implementation of the core functions.  Here is the implementation of `encode`:
+
+```
+(defn encode 
+  "Returns an encoded binary collection."
+  [specified-codec data] 
+   (let [codec (if (keyword? specified-codec) 
+                 (reg-resolve specified-codec)
+                 (extract-codec specified-codec))]
+     (encode* codec data)))
+```
+
+This function takes a look at the passed codec to see if it is a keyword.  If the passed codec is a keyword, then it is assumed that it is in the registry, and it tries to resolve from the registry.  If the passed codec is unregistered, then it calls `extract-codec`, which will be explained in the next section.
+
+Here is the code for `decode` and `alignment`.  They work almost the exact same way that `encode` works.  The only difference is that `decode` uses spec to validate the arguments that were passed to it.
+
+```
+(defn decode [specified-codec bin & decoding-args] 
+  "Given a binary sequence, this will return a tuple with the decoded value, and the
+  rest of the binary that was unused"
+  (let [args (s/conform (s/keys*) decoding-args)
+        codec (if (keyword? specified-codec) 
+                (reg-resolve specified-codec)
+                (extract-codec specified-codec))]
+    (if (s/invalid? args)
+      (throw (ex-info "Invalid decoding args for decode" (s/explain-data (s/keys*) decoding-args)))
+      (decode* codec 
+               (trim-to-alignment (alignment* codec) (seq bin))
+               args))))
+               
+(defn alignment 
+  "Returns the alignment of the specified codec"
+  [specified-codec] 
+  (let [codec (if (keyword? specified-codec) 
+                (reg-resolve specified-codec)
+                (extract-codec specified-codec))]
+    (alignment* codec)))
+```
+
+#### Metamagic (Dealing with Unregistered Codecs)
+
+
+
 ### Defining Primitives
 
 ## The BinaryCollection Protocol
