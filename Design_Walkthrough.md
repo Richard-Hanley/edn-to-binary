@@ -245,6 +245,58 @@ One of the downsides to this implementation is that primitives need to be indivi
 
 ### Combining Spec and Codec
 
+At this point we have a group of macros that can be used to generate specs, and we have a record that can be used to implement the Codec protocol.  Now we just have to tie them together.  First we need a mechanism to relate primitive classes to PrimitiveCodecs
+
+```
+(def primitive-codecs
+  {Byte (map->PrimitiveCodec {:get-buffer #(.get %) :put-buffer #(.put %1 (unchecked-byte %2)) :size (Byte/BYTES) :coerce-from identity})
+   Short (map->PrimitiveCodec {:get-buffer #(.getShort %) :put-buffer #(.putShort %1 (unchecked-short %2)) :size (Short/BYTES) :coerce-from identity})
+   Integer (map->PrimitiveCodec {:get-buffer #(.getInt %) :put-buffer #(.putInt %1 (unchecked-int %2)) :size (Integer/BYTES) :coerce-from identity})
+   Long (map->PrimitiveCodec {:get-buffer #(.getLong %) :put-buffer #(.putLong %1 (unchecked-long %2)) :size (Long/BYTES) :coerce-from identity})
+   Float (map->PrimitiveCodec {:get-buffer #(.getFloat %) :put-buffer #(.putFloat %1 (unchecked-float %2)) :size (Float/BYTES) :coerce-from identity})
+   Double (map->PrimitiveCodec {:get-buffer #(.getDouble %) :put-buffer #(.putDouble %1 (unchecked-double %2)) :size (Double/BYTES) :coerce-from identity})})
+```
+
+The primitive-codecs map has Java classes as keys, and PrimitiveCodecs as values.  So a call like `(get primitive-codecs Short)` would return the apporpriate record. This map is used in the primitive macro shown below:
+
+```
+(defmacro primitive [prim & encoding]
+  (let [c `(get primitive-codecs ~prim)
+        enc `(if (s/valid? (s/keys*) [~@encoding])
+               (s/conform (s/keys*) [~@encoding])
+               (throw (ex-info "Unable to conform encoding" (s/explain-data (s/keys*) [~@encoding]))))]
+  `(with-meta (signed-primitive-spec ~prim)
+              {::codec (merge ~c ~enc)})))
+```
+
+The primitive macro takes a Java primitive class, and gets the record from the primitive-codecs map.  It also validates all of the optional encoding arguments, which are merged with the record.  The result of this merge is still a record, which is a valid implementation of the Codec protocol.
+
+The `with-meta` function merges the `signed-primitive-spec` with the primitive record.  The result of which is a specified codec.  
+
+#### Registering the Specified Primitive
+
+Now that we have a fully functioning primitive that can be freely used with `encode`, `decode`, and `alignment`; we need to register these locally and with spec. 
+
+```
+(edn-to-binary.core/def ::int8 (primitive Byte))
+(edn-to-binary.core/def ::int16 (primitive Short))
+(edn-to-binary.core/def ::int32 (primitive Integer))
+(edn-to-binary.core/def ::int64 (primitive Long))
+
+(edn-to-binary.core/def ::uint8 (unsigned-primitive Byte))
+(edn-to-binary.core/def ::uint16 (unsigned-primitive Short))
+(edn-to-binary.core/def ::uint32 (unsigned-primitive Integer))
+
+(edn-to-binary.core/def ::float (floating-primitive Float))
+(edn-to-binary.core/def ::double (floating-primitive Double))
+```
+
+With this we now have primitives fully functioning.  They are registered as keywords, and function as spec objects and codecs.  Things are pretty good right now, but all of this is for naught if we can't get composite types working.
+
 ## Composite Macros and Implicit Decoders
+
+__WARNING: Dark Magic Ahead__
+
+
 
 ## The BinaryCollection Protocol
