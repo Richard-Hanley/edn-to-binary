@@ -150,8 +150,16 @@ This was accomplished through an intellegient use of metadata.  The return value
      (s/def ~k ~specified-codec)))
 ```
 
-### Defining Primitives
+At this point we have a complete mechanism to integrating instances of the Codec protocol to the Spec protocol.  Codecs are to be attached to existing specs using metadata. The result of attachment can be called a specified-codec, and we now have a `def` macro that can take specified-codecs and register them both locally and in spec.  The rest of this document is going to be discussing the implmentation of different codecs.
 
-## The BinaryCollection Protocol
+## Defining Primitives
+
+The primitive codecs and specs are relatively straightfoward.  However, to reduce the amount of boilerplate and there are a few macros that make it pretty easy to create new primitives.
+
+### Specifying Primitives
+
+A primitive is considered valid so long as it is a valid numerical type and within a valid range.
 
 ## Composite Macros and Implicit Decoders
+
+## The BinaryCollection Protocol
