@@ -50,7 +50,7 @@ However, this is a task that is easier said than done. Spec goes out of it's way
 
 Spec provides a global registry that can be used to register a given spec with a namespace qualified keyword.  At first glance this seem to be fairly small feature, but it ends up being used extensively (in particular when trying to conform maps).  If all codecs can be registered in the same way that specs are, then a programmer can use keywords as a way to symbolically referenece the two without needing any particular code sharing between the libraries.
 
-To accomplish this, the registry needed to be re-implemented.  The followed functions were taken and modified from the Spec source code
+To accomplish this, the registry needed to be re-implemented.  The following functions were taken and modified from the Spec source code
 
 ```
 (defonce ^:private registry-ref (atom {}))
