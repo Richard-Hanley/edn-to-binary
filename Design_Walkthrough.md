@@ -98,7 +98,7 @@ Now that we have these core registry functions, we can take a look at the implem
 
 This function takes a look at the passed codec to see if it is a keyword.  If the passed codec is a keyword, then it is assumed that it is in the registry, and it tries to resolve from the registry.  If the passed codec is unregistered, then it calls `extract-codec`, which will be explained in the next section.
 
-Here is the code for `decode` and `alignment`.  They work almost the exact same way that `encode` works.  The only difference is that `decode` uses spec to validate the arguments that were passed to it.
+Here is the code for `decode` and `alignment`.  They work almost the exact same way that `encode` works.  The only difference is that `decode` uses spec to validate the arguments that were passed to it.  The decode function also has a way to trim alignment padding.  How that works will also have to wait until later.
 
 ```
 (defn decode [specified-codec bin & decoding-args] 
@@ -125,7 +125,28 @@ Here is the code for `decode` and `alignment`.  They work almost the exact same 
 
 #### Metamagic (Dealing with Unregistered Codecs)
 
+The registry alone doesn't do a whole lot.  To tie it all together we need a way to represent specs and codecs in the same object.  We also need to have a way to register a codec and spec together.  
 
+This was accomplished through an intellegient use of metadata.  The return value of all spec macros is a Spec object, and most objects in Clojure can have arbitrary metadata attached to them.  By attaching a codec to the metadata of a spec, there is now a way to create objects that look and feel exactly like specs, but also have all of the extended features of a codec.  
+
+```
+(defn extract-codec 
+  "Given a spec object, this will extract the annotated codec.  The spec must have 
+  a codec embedded in the metadata.  This function will not work on keywords"
+  [spec]
+  (if (keyword? spec)
+    spec
+    (or (::codec (meta spec))
+        (throw (ex-info "No codec defined for the given spec" {:spec spec :meta (meta spec)})))))
+
+(defmacro def 
+  "Given a namespace qualified keyword k, this will register the codec and assocaited
+  spec to k.  The spec is assumed to be part of the metadata of the passed codec"
+  [k specified-codec]
+  `(do 
+     (register-codec ~k (extract-codec ~specified-codec))
+     (s/def ~k ~specified-codec)))
+```
 
 ### Defining Primitives
 
