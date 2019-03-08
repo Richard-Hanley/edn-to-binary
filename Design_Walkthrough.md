@@ -303,9 +303,9 @@ To make things even more complicated, I wanted to be able to be able to provide 
 
 The code in this section is very dense. If you've made it this far into the documentation, then I'm going to assume you have some understanding of how Clojure macros are evaluated.  I welcome any comments or suggestions you may have to make these more hygenic.
 
-### Arrays
+### Thec Codecs
 
-Let's first start with the codec implementation.  There is a `array-impl` function which will reify a Codec 
+Before we get to the macros, let's understand the composite codecs. Each of the three composite types are functions that reify a Codec protocol
 
 ```
 (defn array-impl 
@@ -314,18 +314,105 @@ Let's first start with the codec implementation.  There is a `array-impl` functi
      (alignment* [_] ....)
      (encode* [this data] ...)
      (decode* [this bin decoding-args] ....))))
+     
+
+(defn tuple-impl 
+  ([codecs implicit-decoders]
+   (reify Codec
+     (alignment* [_] ....)
+     (encode* [this data] ...)
+     (decode* [this bin decoding-args] ....))))
+     
+
+(defn struct-impl 
+  ([key-codec-pairs implicit-decoders]
+   (reify Codec
+     (alignment* [_] ....)
+     (encode* [this data] ...)
+     (decode* [this bin decoding-args] ....))))
 ```
 
-The alignment and encoding unction is fairly trivial
+#### Encoding an Array
+
+If we take a look at the implementation of the of the array Codec (sans decoding for now), you'll notice a call to a `raw-alignment` and `raw-encode`
 
 ```
-(alignment* [_] (raw-alignment codec))
-(encode* [this data] (make-binary (mapv (partial raw-encode codec) data)
-                                   :align (alignment* this)))
+(defn array-impl 
+  ([codec]
+   (reify Codec
+     (alignment* [_] (raw-alignment codec))
+     (encode* [this data] (make-binary (mapv (partial raw-encode codec) data)
+                                       :align (alignment* this)))
+     (decode* [this bin decoding-args] ....))))
+
+(defn- raw-alignment [codec-form] 
+  (let [codec (if (keyword? codec-form) 
+                (reg-resolve codec-form)
+                codec-form)]
+    (alignment* codec)))
+
+(defn- raw-encode 
+  [codec-form data] 
+   (let [codec (if (keyword? codec-form) 
+                 (reg-resolve codec-form)
+                 codec-form)]
+     (encode* codec data)))
+````
+
+The raw functions work very similarly to the normal core functions, except they are working with either registered keywords or raw Codec objects, and never take Spec objects.
+
+The alignment on an array is always just the alignment of it's base codec that is passed in.  And the encoding is simply done by mapping `raw-encode` to each element in the passed array.  The `make-binary` function just tags the resulting vector with some metadata.
+
+#### Encoding a Tuple
+
+The implementation of a tuple is similar to an array.  In this case however, a vector of codecs is passed instead of a single repeated codec
+
+```
+(defn tuple-impl [codecs implicit-decoders]
+  (reify Codec
+    (alignment* [_] (apply max (map raw-alignment codecs)))
+    (encode* [this data] (make-binary (map raw-encode codecs data)
+                                   :align (raw-alignment this)))
+    (decode* [this bin decoding-args]  ...)))
 ```
 
-You may notice that there are calls to `raw-alignment` and `raw-encode`.  These functions will resolve the codec if it is a registered keyword, or call `alignment*` and `encode*` directly if the codec is a raw Codec object.
+In the case of a tuple each element in the passed data is a different type.  The alignment on such a tuple must be the maximum alignment of all the passed types.  The encoding can be done by mapping codecs to their data.
 
-The decode function is where things get a little 
+#### Encoding a Struct
+
+A struct is like a tuple, except each element is gotten by key instead of index.  Instead of getting a list of codecs, the struct takes a list of key-codec pairs.  This gives a clear relationship to keys and order.
+
+```
+(defn struct-impl [key-codec-pairs implicit-decoders]
+  (let [key-order (map first key-codec-pairs)
+        codecs (map second key-codec-pairs)
+        ordered-values (fn [coll]
+                        (map #(get coll %) key-order))]
+    (reify Codec
+      (alignment* [this] (apply max (map raw-alignment codecs)))
+      (encode* [this data] (make-binary (zipmap key-order
+                                                (map raw-encode codecs (ordered-values data)))
+                                        :align (alignment* this)
+                                        :order key-order))
+      (decode* [this bin decoding-args] ...))))
+```
+
+The first thing to do a struct is to destructure the key-codec-pairs.  By mapping first to the pair list, you get the individual keys.  By mapping second, you get the codec.
+
+The ordered-values function takes a map, and returns a list of values that are gotten from the key-order.  This is the function that effectively converts a map into a tuple.
+
+After this processing is done, alignment and encoding look very similar to the implementation of tuple.  The main difference is that before calling `make-binary` the result of the encoding is zipped together with the key-order.  This reconstructs a map that is returns by the `encode*` function.
+
+### Composite Decoders
+
+#### Decoding an Array
+
+#### Decoding a Tuple
+
+#### Decoding a Struct
+
+### The Spec Macros
 
 ## The BinaryCollection Protocol
+
+__TODO__ Add in some documentation for the Binary Collection Protocol the `make-binary` function, and the `flatten` function
