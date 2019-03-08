@@ -397,7 +397,7 @@ A struct is like a tuple, except each element is gotten by key instead of index.
       (decode* [this bin decoding-args] ...))))
 ```
 
-The first thing to do a struct is to destructure the key-codec-pairs.  By mapping first to the pair list, you get the individual keys.  By mapping second, you get the codec.
+The first thing to do in a struct is to destructure the key-codec-pairs.  By mapping first to the pair list, you get the individual keys.  By mapping second, you get the codec.
 
 The ordered-values function takes a map, and returns a list of values that are gotten from the key-order.  This is the function that effectively converts a map into a tuple.
 
@@ -405,13 +405,119 @@ After this processing is done, alignment and encoding look very similar to the i
 
 ### Composite Decoders
 
+The difficulty with encoding complex data types, is that there is some runtime information that is usually needed.  However, that runtime information has been stripped out of binary data.  For that reason decoders need to accept some decoding-args, which can be used to give hints to a given codec. The decoding arguments are a map, with each codec having specific keys that can be passed.
+
 #### Decoding an Array
+
+An array takes two special decoding args.  The first, `::e/count` is passed to tell the array how many elements are in the array.  If this is not passed, then the array will assume that all remaining data is part of the array, and it will consume all bytes when decoding.
+
+The other special decoding arg is `::e/child-args`.  This field is a function of the form `(fn [decoding-args index])` and returns a map of decoding args.  This gives callers a way to create custom decoding args that are passed to specific indicies of the array.  IF this is not included, no decoding arguments will be passed to the child codecs.
+
+```
+(defn array-impl 
+  ([codec]
+   (reify Codec
+     ....
+     (decode* [this bin decoding-args]
+       (let [count (::count decoding-args) 
+             child-args (or (::child-args decoding-args) (constantly nil)) 
+             elem-args (if (some? count)
+                         (map #(child-args decoding-args %) (range count))
+                         (map #(child-args decoding-args %) (range)))]
+         (reduce (fn [[data-accum current-rem] arg]
+                   (let [[new-data bin-rem] (raw-decode codec current-rem arg)
+                         result [(conj data-accum new-data)
+                                 bin-rem]]
+                     (if (empty? bin-rem)
+                       (reduced result)
+                       result)))
+                 [[] bin]
+                 elem-args))))))
+```
+
+The first thing is to parse the `decoding-args` to see if there is a special count or child args.  Once that is sorted out, the `elem-args` list is created.  This is a list of all decoding arguments that will be passed on to the child codecs.
+
+After that, there is a complicated reduce that is used to calculate the return value.  Remember, the return value of `decode*` is a tuple of decoded data and the remaining binary.  So let's think about this problem iteratively
+
+1. At the start the entire binary is remaining, and there is no decoded data
+2. For each `elem-arg` call the `raw-decode` function with the remaining binary
+3. Append the decoded data to a list, and the remaining binary from `raw-decode` the new remaining binary
+4. If there are no more `elem-args` or there is no more binary data, then finish.  Otherwise move on to the next `elem-arg`
+
+In this reduction, there is a call to the `raw-decode` function seen below.
+
+```
+(defn- raw-decode [codec-form bin decoding-args] 
+  (let [args (s/conform (s/keys) (or decoding-args {}))
+        codec (if (keyword? codec-form) 
+                (reg-resolve codec-form)
+                codec-form)]
+    (if (s/invalid? args)
+      (throw (ex-info "Invalid decoding args for raw decode" (s/explain-data (s/keys) decoding-args)))
+      (decode* codec 
+               (trim-to-alignment (alignment* codec) bin)
+               args))))
+```
+
+There are a couple of things being done in this function.  First, any decoding arg is being conformed using spec.  This gives us some safety with out decoding arguments, becuase any globally registered spec will be detected using this.  Then the raw codec object is resolved, if need be.  The binary is then trimmed to the proper alignment before being decoded by the raw codec.
 
 #### Decoding a Tuple
 
+When decoding a tuple, we need to introduce the concept of an implicit decoder.  An implicit decoder is a function of the form `fn [data decoding-args]` that returns a decoding argument.  This allows a user to write a custom decoding argument based on the data that has been decoded thus far.
+
+The `tuple-impl` is passed a map of implicit decoders.  The keys to this map is a index.  That way, when decoding, the codec can easily get the implicit decoder.  If there is no implicit decoder for a given index, nil is used.
+
+Tuples also support the `::e/child-args` argument, which works exactly like the array.
+
+```
+(defn tuple-impl [codecs implicit-decoders]
+  (reify Codec
+    ...
+    (decode* [this bin decoding-args] 
+      (let [child-args (or (::child-args decoding-args) (constantly nil))]
+        (reduce (fn [[data-accum current-rem] [i codec]]
+                  (let [implicit-fn (get implicit-decoders i (constantly nil))
+                        args (merge 
+                               (child-args decoding-args i)
+                               (implicit-fn data-accum decoding-args))
+                        [new-data bin-rem] (raw-decode codec current-rem args)]
+                    [(conj data-accum new-data)
+                     bin-rem]))
+                [[] bin]
+                (map-indexed vector codecs))))))
+```
+
+This function works like the array decoder, with the small difference that it uses the implicit decoder map on every element in the tuple.
+
 #### Decoding a Struct
 
+Struct decoding works almost exactly like the tuple decoding except all functions take keys instead of indicies, and the result must be assoc'ed together instead of conj'ed
+
+```
+(defn struct-impl [key-codec-pairs implicit-decoders]
+  (let [key-order (map first key-codec-pairs)
+        codecs (map second key-codec-pairs)
+        ordered-values (fn [coll]
+                        (map #(get coll %) key-order))]
+    (reify Codec
+      ...
+      (decode* [this bin decoding-args] 
+        (let [child-args (or (::child-args decoding-args) (constantly nil))]
+          (reduce (fn [[data-accum current-rem] [k codec]]
+                    (let [implicit-fn (get implicit-decoders k (constantly nil))
+                          args (merge 
+                                 (child-args decoding-args k)
+                                 (implicit-fn data-accum decoding-args))
+                          [new-data bin-rem] (raw-decode codec current-rem args)]
+                      [(assoc data-accum k new-data)
+                       bin-rem]))
+                  [{} bin]
+                  (map vector key-order codecs)))))))
+```
+
 ### The Spec Macros
+
+Now for the final piece to tie this entire library together.  
 
 ## The BinaryCollection Protocol
 
