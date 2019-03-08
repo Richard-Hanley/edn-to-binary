@@ -1,5 +1,11 @@
 # Design Walkthrough
 
+This library was designed to provide advanced formatting features along with strong data validation using clojure.spec.  For the most part it accomplishes this task.  However, the integration with clojure.spec is far and away the most difficult part in this library.  There is some dark magic in the spec macros, and trying to write macros that wrap around them probably should not have been attempted by a mere mortal such as myself.
+
+Nonetheless, I've dabbled in that dark magic, and so far everything seems to have worked out alright.  The only truly ugly macro right now is the `e/struct` macro.
+
+This document is a fairly thorough walkthrough of the different pieces were build for this library, and how they tie together.  The first few sections should be comprehensible to someone who has a basic understanding of Clojure, and has read through the [Spec Guide](https://clojure.org/guides/spec).  It does ramp up a bit in complexity towards the end, and if you're having trouble understanding something, feel free to contact me.   
+
 ## Repo Structure
 
 ```
