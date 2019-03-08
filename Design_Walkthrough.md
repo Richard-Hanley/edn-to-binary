@@ -523,7 +523,138 @@ Struct decoding works almost exactly like the tuple decoding except all function
 
 ### The Spec Macros
 
-Now for the final piece to tie this entire library together.  
+Now for the final piece to tie this entire library together.  Each of the composite types needs a macro that can pass commands to spec and the different implementation function defined in the previous sections
+
+#### Array Spec
+
+The array spec is a pretty clear wrapper around `s/coll-of`.  It takes all of the same arguments.  The only special feature is that if a specific count is specified, then that count should always be sent to the decoder.  There is a special function `fixed-decoder` that can be used to force the array codec to alway decode a certain number of elements. The resulting codec and spec are then combined using 
+
+```
+(defmacro array 
+  "Create an array codec and spec.
+  The array macro takes the same arguments as s/coll-of and s/every, with one differences
+  There is no support for an :into argument.  All results from the array spec
+  will be conformed into a vector
+  If :count is not specified in the arguments, then the decoding args can take a :edn-to-binary.core/count
+  field that will limit the amount of units decoded. 
+  The decoding argumments take an additional field ::child-args, which is expected to be a function
+  of the form (fn [array-args index]), and will return the child arguments.  If this is null, then 
+  no arguments will be sent to child elements
+  Arrays do not support implicit decoders
+  "
+  [specified-codec & {:keys [align kind count max-count min-count distinct gen-max gen]}]
+  (let [array-imp  `(array-impl (extract-codec ~specified-codec))
+        codec-imp `(if ~count
+                     (fixed-decoder ~array-imp ::count ~count)
+                     ~array-imp)]
+    `(with-meta (s/coll-of ~specified-codec
+                           :into []
+                           :kind ~kind
+                           :count ~count
+                           :max-count ~max-count
+                           :min-count ~min-count
+                           :distinct ~distinct
+                           :gen-max ~gen-max
+                           :gen ~gen)
+                {::codec ~codec-imp})))
+```
+
+#### Tuple Spec
+
+The `e/tuple` interface is almost identical to the `s/tuple` interface.  The only difference is that the tuple codec must first extract any implicit decoders.   
+
+```
+(defmacro tuple 
+  "Takes one or more specified codecs and returns a tuple spec/codec.
+  Each specified codec may be an implicit-decoder. An implicit decoder takes
+  a function of data accumulated so far, and the decoding arguments, and returns
+  a map that can be used as decoding margs.  This is called using a sequence
+  (e/implicit-decoder
+    (fn [data args] ....)
+    codec)
+  "
+  [& specified-codecs]
+  (let [[implicit-decoders specs] (reduce 
+                                    (fn [[de sp] [i sc]]
+                                      (if (seq? sc)
+                                        (if (implicit-decoder? (first sc))
+                                          [(assoc de i (nth sc 1)) (conj sp (nth sc 2))]
+                                          [de (conj sp sc)])
+                                        [de (conj sp sc)]))
+                                    [{} []]
+                                    (map-indexed vector specified-codecs))]
+  `(with-meta (s/tuple ~@specs)
+              {::codec (tuple-impl (mapv extract-codec [~@specs]) ~implicit-decoders)})))
+```
+
+That reduction deserves some extra note, because there is some magic going on here.  The idea is that the `specified-codecs` are either an ordinary spec with an attached codec, or it is a special implicit decoder.
+
+If a given element is a sequence, then it may either be an unevaluated form or it may be an implicit decoder.  Remember that macros do not evaulate thier arguments.  So if one of the passed arguments is a sequence, and the first element is the exact symbol `e/implicit-decoder`, then and only then is that element an implicit decoder.
+
+When you get find an implicit decoder, then the sequence has the form `(e/implicit-decoder some-fn some-codec)`  This must be manually extracted out, and added onto the accumulated map of implicit decoders.
+
+At the end of that reduction, all of the specified codecs have been extracted into a vector.  And any implicit decoders have been assoc'ed into a map that the `tuple-impl` understands. 
+
+#### Struct Spec
+
+This macro is where the magic truly becomes absurd.  The `s/keys` will only ever accept keywords.  It will not except forms that evaulate to keywords, and it will not accept any symbols the resolve to keywords.  This places some very heavy restrictions on what can be done, since almost everything in clojure is either a symbol or unevaluated form.
+
+This means that our arguments to the `e/struct` macro cannot do any manipulation of the given keywords.  
+
+To make matters more complicated, spec takes a pretty strong on having all arguments be fully qualified keywords.  This means that we need to provide a way for users to be able to mark a particular field as `unqualified`.
+
+So the struct macro works in three stages.  The first stage extracts any implicit decoders.  The second stage parses any `unqualified` keywords.
+
+The result of the second stage are three vectors; a vector of all fully-qualified keywords, a vector of fully-qualified keywords that should be unqualified when calling `s/conform` and `e/encode`, and finally a list of key-codec pairs that can be sent to `atruct-impl`
+
+```
+(defmacro struct 
+  "Takes a list of registered spec/codecs and creates a map spec/codec.
+  Spec requires that all maps are conformed with fully qualified keywords. That is why calls
+  to spec take the form '(s/keys :req [...] :req-un [...])
+  This is a bit of a problem for codecs, since order is very importatnt to a struct.
+  So a struct takes a list of arguments.  Args can either be keywords or sequences.
+  The following call:
+  (e/struct ::foo
+            ::bar
+            ::baz)
+  would conform a map of {::foo ... ::bar ... ::baz ...} and encode in that order
+  However, the following call:
+  (e/struct ::foo
+            (unqualified ::bar)
+            (unqualified ::baz))
+  would conform a map of {::foo ... :bar ... :baz ...} The order is maintianed, but :bar
+  and :baz no longer need their namespace
+  structs can also use implicit-decoders
+  "
+  [& registered-codecs]
+  (let [[implicit-decoders specs] (reduce 
+                                    (fn [[de sp] sc]
+                                      (if (seq? sc)
+                                        (let [[sym decoder key] sc]
+                                          (if (implicit-decoder? sym)
+                                            [(assoc de key decoder) (conj sp key)]
+                                            (throw (IllegalArgumentException. "Only implicit decoders may be called from struct field"))))
+                                        [de (conj sp sc)]))
+                                    [{} []]
+                                    registered-codecs)
+        unk #(-> % name keyword)
+        qualified-order (fn [k] [k k])
+        unqualified-order (fn [k] [(unk k) k])
+        [req req-un order] (reduce (fn [[req req-un order] f]
+                                     (cond 
+                                       (keyword? f) [(conj req f) req-un (conj order (qualified-order f))]
+                                       (and (seq? f)
+                                            (unqualified? (first f))) [req (conj req-un (second f)) (conj order (unqualified-order (second f)))]
+                                       :else (throw (ex-info "Struct field is not qualified keyword or unqualified sequence"
+                                                             {:field f}))))
+
+
+                                   [[] [] []]
+                                   specs)]
+    `(with-meta (s/keys :req [~@req] :req-un [~@req-un])
+                {::codec (struct-impl [~@order] ~implicit-decoders)})))
+```
 
 ## The BinaryCollection Protocol
 
